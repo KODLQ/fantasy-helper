@@ -1,0 +1,63 @@
+package main
+
+import (
+	"context"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"fantasy-helper/backend/internal/app"
+)
+
+func main() {
+	logger := app.NewLogger(os.Getenv("APP_ENV"))
+	cfg, err := app.LoadConfig()
+	if err != nil {
+		logger.Error("invalid configuration", "error", err)
+		os.Exit(1)
+	}
+	database, err := app.OpenDatabase(context.Background(), cfg)
+	if err != nil {
+		logger.Error("database unavailable", "error", err)
+		os.Exit(1)
+	}
+	defer database.Close()
+	repository := app.NewPostgresRepository(database, logger)
+	if err := repository.EnsureSchema(context.Background()); err != nil {
+		logger.Error("database schema unavailable", "error", err)
+		os.Exit(1)
+	}
+	store := app.NewStore()
+	if snapshot, ok, err := repository.LoadSnapshot(context.Background()); err != nil {
+		logger.Error("load persisted snapshot failed", "error", err)
+	} else if ok {
+		store.ApplySnapshot(snapshot.Season, snapshot.Gameweeks, snapshot.Teams, snapshot.Players, snapshot.Fixtures, snapshot.Histories)
+	} else if err := repository.UpsertSnapshot(context.Background(), store.ExportSnapshot()); err != nil {
+		logger.Error("seed demo snapshot failed", "error", err)
+	}
+	if squad, ok, err := repository.LoadSquad(context.Background()); err != nil {
+		logger.Error("load persisted squad failed", "error", err)
+	} else if ok {
+		store.SaveSquad(squad)
+	}
+	source := app.NewFPLSource(cfg.FPLBaseURL)
+	api := app.NewAPI(store, source, func(ctx context.Context) bool {
+		return database.PingContext(ctx) == nil
+	}, logger, repository)
+	server := &http.Server{Addr: ":" + cfg.Port, Handler: api.Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		logger.Info("server listening", "port", cfg.Port)
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Error("server stopped", "error", err)
+			os.Exit(1)
+		}
+	}()
+	<-stop
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
+	defer cancel()
+	_ = server.Shutdown(ctx)
+}

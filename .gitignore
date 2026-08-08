@@ -1,0 +1,11 @@
+.env
+.env.*
+!.env.example
+node_modules/
+frontend/dist/
+frontend/playwright-report/
+frontend/test-results/
+backend/bin/
+backend/tmp/
+*.log
+.DS_Store

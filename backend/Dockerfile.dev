@@ -1,0 +1,9 @@
+FROM golang:1.26-alpine
+WORKDIR /workspace
+RUN apk add --no-cache ca-certificates wget
+COPY go.mod ./
+COPY dev-watch.sh ./dev-watch.sh
+RUN go mod download
+EXPOSE 8080
+CMD ["/workspace/dev-watch.sh"]
+

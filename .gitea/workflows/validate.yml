@@ -1,0 +1,58 @@
+name: validate
+
+on:
+  push:
+    branches:
+      - main
+      - 'task/**'
+      - 'release/**'
+  pull_request:
+    branches:
+      - main
+      - 'release/**'
+
+jobs:
+  build:
+    name: build
+    runs-on: linux-docker
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Build backend
+        working-directory: backend
+        run: go build ./...
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+
+  test:
+    name: test
+    runs-on: linux-docker
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Test backend
+        working-directory: backend
+        run: go test ./...
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Test frontend
+        working-directory: frontend
+        run: npm test
+
+  lint:
+    name: lint
+    runs-on: linux-docker
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Lint frontend
+        working-directory: frontend
+        run: npm run lint

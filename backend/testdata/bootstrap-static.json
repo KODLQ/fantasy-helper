@@ -1,0 +1,6 @@
+{
+  "events": [{"id": 1, "name": "Gameweek 1", "is_current": true, "finished": false}],
+  "teams": [{"id": 1, "name": "Example FC", "short_name": "EXA"}],
+  "elements": [{"id": 10, "first_name": "Example", "second_name": "Player", "web_name": "Player", "element_type": 3, "team": 1, "now_cost": 55, "total_points": 42, "form": "6.2", "minutes": 500, "value_form": "11.1", "status": "a"}]
+}
+
