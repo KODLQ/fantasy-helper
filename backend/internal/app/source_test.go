@@ -4,7 +4,10 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestSourceNormalizesSnapshot(t *testing.T) {
@@ -92,6 +95,16 @@ func TestSourceRetriesRateLimitsAndServerErrors(t *testing.T) {
 			if attempts != 2 {
 				t.Fatalf("attempts = %d, want 2", attempts)
 			}
+			metrics := source.Metrics()
+			var expectedRateLimited, expectedServerErrors uint64
+			if status == http.StatusTooManyRequests {
+				expectedRateLimited = 1
+			} else {
+				expectedServerErrors = 1
+			}
+			if metrics.Requests != 2 || metrics.Retries != 1 || metrics.RateLimited != expectedRateLimited || metrics.ServerErrors != expectedServerErrors {
+				t.Fatalf("unexpected source metrics: %#v", metrics)
+			}
 		})
 	}
 }
@@ -142,5 +155,44 @@ func TestSourceNormalizesFixtureLiveAndPlayerSummaryFeeds(t *testing.T) {
 	summary, _, err := source.ElementSummary(context.Background(), 10)
 	if err != nil || len(summary.History) != 1 || summary.History[0].Fixture != 99 || len(summary.HistoryPast) != 1 || len(summary.Fixtures) != 1 {
 		t.Fatalf("unexpected element summary: %#v err=%v", summary, err)
+	}
+}
+
+func TestSourceBoundsPerHostConcurrency(t *testing.T) {
+	var active atomic.Int32
+	var peak atomic.Int32
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		current := active.Add(1)
+		for observed := peak.Load(); current > observed && !peak.CompareAndSwap(observed, current); observed = peak.Load() {
+		}
+		<-release
+		active.Add(-1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"events":[],"phases":[],"game_settings":{},"element_types":[],"teams":[],"elements":[]}`))
+	}))
+	defer server.Close()
+	source := NewFPLSource(server.URL)
+	source.SetMaxConcurrent(2)
+	source.RetryJitter = 0
+	var workers sync.WaitGroup
+	for index := 0; index < 6; index++ {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			if _, _, err := source.Bootstrap(context.Background()); err != nil {
+				t.Errorf("bootstrap failed: %v", err)
+			}
+		}()
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for peak.Load() < 2 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	close(release)
+	workers.Wait()
+	metrics := source.Metrics()
+	if peak.Load() != 2 || metrics.PeakConcurrent != 2 || metrics.InFlight != 0 || metrics.Requests != 6 {
+		t.Fatalf("concurrency was not bounded: serverPeak=%d metrics=%#v", peak.Load(), metrics)
 	}
 }

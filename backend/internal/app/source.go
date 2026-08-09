@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -20,6 +22,34 @@ type FPLSource struct {
 	SeasonName     string
 	AllowDiscovery bool
 	OnObservation  func(SourceObservation)
+	RetryJitter    time.Duration
+	MaxConcurrent  int
+	semaphore      chan struct{}
+	metrics        sourceMetrics
+}
+
+type sourceMetrics struct {
+	Requests            atomic.Uint64
+	Retries             atomic.Uint64
+	RateLimited         atomic.Uint64
+	ServerErrors        atomic.Uint64
+	TransportErrors     atomic.Uint64
+	InFlight            atomic.Uint64
+	PeakConcurrent      atomic.Uint64
+	TotalDurationMillis atomic.Uint64
+	LastStatus          atomic.Int64
+}
+
+type SourceMetrics struct {
+	Requests        uint64 `json:"requests"`
+	Retries         uint64 `json:"retries"`
+	RateLimited     uint64 `json:"rateLimited"`
+	ServerErrors    uint64 `json:"serverErrors"`
+	TransportErrors uint64 `json:"transportErrors"`
+	InFlight        uint64 `json:"inFlight"`
+	PeakConcurrent  uint64 `json:"peakConcurrent"`
+	TotalDurationMs uint64 `json:"totalDurationMs"`
+	LastStatus      int    `json:"lastStatus"`
 }
 type SourceObservation struct {
 	Endpoint        string
@@ -294,7 +324,9 @@ type PastSeasonHistory struct {
 }
 
 func NewFPLSource(baseURL string) *FPLSource {
-	return &FPLSource{BaseURL: strings.TrimRight(baseURL, "/"), Client: &http.Client{Timeout: 20 * time.Second}, Retries: 2, AllowDiscovery: true}
+	source := &FPLSource{BaseURL: strings.TrimRight(baseURL, "/"), Client: &http.Client{Timeout: 20 * time.Second}, Retries: 2, AllowDiscovery: true, RetryJitter: 100 * time.Millisecond, MaxConcurrent: 6}
+	source.configureSemaphore()
+	return source
 }
 func NewFPLSourceWithSeason(baseURL string, seasonID int, seasonName string) *FPLSource {
 	source := NewFPLSource(baseURL)
@@ -303,32 +335,118 @@ func NewFPLSourceWithSeason(baseURL string, seasonID int, seasonName string) *FP
 	source.AllowDiscovery = false
 	return source
 }
+func (f *FPLSource) configureSemaphore() {
+	if f.MaxConcurrent < 1 {
+		f.MaxConcurrent = 1
+	}
+	if cap(f.semaphore) != f.MaxConcurrent {
+		f.semaphore = make(chan struct{}, f.MaxConcurrent)
+	}
+}
+func (f *FPLSource) SetMaxConcurrent(value int) {
+	if value < 1 {
+		value = 1
+	}
+	f.MaxConcurrent = value
+	f.configureSemaphore()
+}
+func (f *FPLSource) Metrics() SourceMetrics {
+	return SourceMetrics{Requests: f.metrics.Requests.Load(), Retries: f.metrics.Retries.Load(), RateLimited: f.metrics.RateLimited.Load(), ServerErrors: f.metrics.ServerErrors.Load(), TransportErrors: f.metrics.TransportErrors.Load(), InFlight: f.metrics.InFlight.Load(), PeakConcurrent: f.metrics.PeakConcurrent.Load(), TotalDurationMs: f.metrics.TotalDurationMillis.Load(), LastStatus: int(f.metrics.LastStatus.Load())}
+}
+func (f *FPLSource) acquire(ctx context.Context) error {
+	select {
+	case f.semaphore <- struct{}{}:
+		current := f.metrics.InFlight.Add(1)
+		for peak := f.metrics.PeakConcurrent.Load(); current > peak && !f.metrics.PeakConcurrent.CompareAndSwap(peak, current); peak = f.metrics.PeakConcurrent.Load() {
+		}
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+func (f *FPLSource) release() {
+	<-f.semaphore
+	f.metrics.InFlight.Add(^uint64(0))
+}
+func retryAfter(value string, now time.Time) time.Duration {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0
+	}
+	if seconds, err := time.ParseDuration(value + "s"); err == nil {
+		return seconds
+	}
+	if at, err := http.ParseTime(value); err == nil {
+		if delay := at.Sub(now); delay > 0 {
+			return delay
+		}
+	}
+	return 0
+}
+func (f *FPLSource) retryDelay(attempt int, response *http.Response) time.Duration {
+	exponent := attempt
+	if exponent > 8 {
+		exponent = 8
+	}
+	wait := time.Duration(1<<exponent) * 150 * time.Millisecond
+	if response != nil {
+		if retry := retryAfter(response.Header.Get("Retry-After"), time.Now().UTC()); retry > 0 {
+			wait = retry
+		}
+	}
+	if f.RetryJitter > 0 {
+		wait += time.Duration(rand.Int63n(int64(f.RetryJitter) + 1))
+	}
+	return wait
+}
 func (f *FPLSource) get(ctx context.Context, path string, target interface{}) (string, error) {
 	var last error
 	for attempt := 0; attempt <= f.Retries; attempt++ {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, f.BaseURL+path, nil)
-		if err != nil {
+		if err := f.acquire(ctx); err != nil {
+			f.metrics.TransportErrors.Add(1)
 			return "", err
 		}
-		response, err := f.Client.Do(req)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, f.BaseURL+path, nil)
 		if err != nil {
+			f.release()
+			return "", err
+		}
+		requestStarted := time.Now()
+		response, err := f.Client.Do(req)
+		f.metrics.Requests.Add(1)
+		if err != nil {
+			f.release()
+			f.metrics.TotalDurationMillis.Add(uint64(time.Since(requestStarted).Milliseconds()))
 			last = err
+			f.metrics.TransportErrors.Add(1)
+			if ctx.Err() != nil {
+				return "", ctx.Err()
+			}
+			if attempt < f.Retries {
+				f.metrics.Retries.Add(1)
+			}
 			continue
 		}
 		body, readErr := io.ReadAll(io.LimitReader(response.Body, 8<<20))
+		f.metrics.LastStatus.Store(int64(response.StatusCode))
 		response.Body.Close()
+		f.release()
+		f.metrics.TotalDurationMillis.Add(uint64(time.Since(requestStarted).Milliseconds()))
 		if readErr != nil {
 			last = readErr
 			continue
 		}
 		if response.StatusCode >= 500 || response.StatusCode == http.StatusTooManyRequests {
 			last = fmt.Errorf("source returned %s", response.Status)
-			wait := time.Duration(attempt+1) * 150 * time.Millisecond
-			if retryAfter := response.Header.Get("Retry-After"); retryAfter != "" {
-				if seconds, parseErr := time.ParseDuration(retryAfter + "s"); parseErr == nil {
-					wait = seconds
-				}
+			if response.StatusCode == http.StatusTooManyRequests {
+				f.metrics.RateLimited.Add(1)
+			} else {
+				f.metrics.ServerErrors.Add(1)
 			}
+			if attempt < f.Retries {
+				f.metrics.Retries.Add(1)
+			}
+			wait := f.retryDelay(attempt, response)
 			select {
 			case <-ctx.Done():
 				return "", ctx.Err()
@@ -337,6 +455,7 @@ func (f *FPLSource) get(ctx context.Context, path string, target interface{}) (s
 			continue
 		}
 		if response.StatusCode < 200 || response.StatusCode >= 300 {
+			f.metrics.ServerErrors.Add(1)
 			return "", fmt.Errorf("source returned %s", response.Status)
 		}
 		checksum := fmt.Sprintf("%x", sha256.Sum256(body))
@@ -351,6 +470,7 @@ func (f *FPLSource) get(ctx context.Context, path string, target interface{}) (s
 		}
 		return checksum, nil
 	}
+	f.metrics.ServerErrors.Add(1)
 	return "", last
 }
 

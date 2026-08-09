@@ -48,6 +48,8 @@ func main() {
 	source.AllowDiscovery = cfg.SourceDiscovery
 	source.Client.Timeout = cfg.SourceTimeout
 	source.Retries = cfg.SourceRetries
+	source.RetryJitter = cfg.SourceRetryJitter
+	source.SetMaxConcurrent(cfg.SourceMaxConcurrent)
 	api := app.NewAPI(store, source, func(ctx context.Context) bool {
 		return database.PingContext(ctx) == nil
 	}, logger, repository)

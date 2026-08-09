@@ -27,7 +27,7 @@ make down ENV=local
 
 Use `make logs ENV=local` to follow service output and `make config ENV=local` to inspect the resolved Compose configuration. Local opens at [http://localhost:5173](http://localhost:5173); dev at [http://localhost:5174](http://localhost:5174); prod at [http://localhost:8080](http://localhost:8080). The environment files under `deploy/env/` keep the database volumes, ports, and API URL separate. Replace the production password in `deploy/env/prod.env` before a real deployment.
 
-The application starts with a small deterministic demo snapshot so the workspace is useful before the first official sync. Use “Sync official data” to import the configured FPL endpoints. Set `FPL_SOURCE_SEASON_ID` and `FPL_SOURCE_SEASON_NAME` together for an explicit season; discovery mode is supported when the upstream bootstrap payload includes season metadata.
+The application starts with a small deterministic demo snapshot so the workspace is useful before the first official sync. Use “Sync official data” to import the configured FPL endpoints. Set `FPL_SOURCE_SEASON_ID` and `FPL_SOURCE_SEASON_NAME` together for an explicit season; discovery mode is supported when the upstream bootstrap payload includes season metadata. Transport behavior is controlled with `FPL_SOURCE_TIMEOUT`, `FPL_SOURCE_RETRIES`, `FPL_SOURCE_RETRY_JITTER`, and `FPL_SOURCE_MAX_CONCURRENT`; retryable responses use exponential backoff, honor `Retry-After`, and expose redacted counters through the source adapter metrics.
 
 ## API surface
 

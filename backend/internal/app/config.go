@@ -13,20 +13,22 @@ import (
 )
 
 type Config struct {
-	Port             string
-	DatabaseURL      string
-	FPLBaseURL       string
-	SourceSeasonID   int
-	SourceSeasonName string
-	SourceDiscovery  bool
-	SourceTimeout    time.Duration
-	SourceRetries    int
-	SyncWorkers      int
-	Environment      string
-	DatabaseMaxConns int
-	DatabaseMaxIdle  int
-	DatabasePing     time.Duration
-	ShutdownTimeout  time.Duration
+	Port                string
+	DatabaseURL         string
+	FPLBaseURL          string
+	SourceSeasonID      int
+	SourceSeasonName    string
+	SourceDiscovery     bool
+	SourceTimeout       time.Duration
+	SourceRetries       int
+	SourceRetryJitter   time.Duration
+	SourceMaxConcurrent int
+	SyncWorkers         int
+	Environment         string
+	DatabaseMaxConns    int
+	DatabaseMaxIdle     int
+	DatabasePing        time.Duration
+	ShutdownTimeout     time.Duration
 }
 
 func LoadConfig() (Config, error) {
@@ -64,21 +66,30 @@ func LoadConfig() (Config, error) {
 	if retries < 0 || workers < 1 {
 		return Config{}, fmt.Errorf("FPL_SOURCE_RETRIES must be non-negative and SYNC_WORKERS must be positive")
 	}
+	maxConcurrent, err := envInt("FPL_SOURCE_MAX_CONCURRENT", workers)
+	if err != nil {
+		return Config{}, err
+	}
+	if maxConcurrent < 1 {
+		return Config{}, fmt.Errorf("FPL_SOURCE_MAX_CONCURRENT must be positive")
+	}
 	return Config{
-		Port:             configEnv("BACKEND_PORT", "8080"),
-		DatabaseURL:      os.Getenv("DATABASE_URL"),
-		FPLBaseURL:       configEnv("FPL_BASE_URL", "https://fantasy.premierleague.com/api"),
-		SourceSeasonID:   seasonID,
-		SourceSeasonName: seasonName,
-		SourceDiscovery:  discovery,
-		SourceTimeout:    envDuration("FPL_SOURCE_TIMEOUT", 20*time.Second),
-		SourceRetries:    retries,
-		SyncWorkers:      workers,
-		Environment:      configEnv("APP_ENV", "local"),
-		DatabaseMaxConns: maxConns,
-		DatabaseMaxIdle:  maxIdle,
-		DatabasePing:     envDuration("DB_PING_TIMEOUT", 3*time.Second),
-		ShutdownTimeout:  envDuration("SHUTDOWN_TIMEOUT", 10*time.Second),
+		Port:                configEnv("BACKEND_PORT", "8080"),
+		DatabaseURL:         os.Getenv("DATABASE_URL"),
+		FPLBaseURL:          configEnv("FPL_BASE_URL", "https://fantasy.premierleague.com/api"),
+		SourceSeasonID:      seasonID,
+		SourceSeasonName:    seasonName,
+		SourceDiscovery:     discovery,
+		SourceTimeout:       envDuration("FPL_SOURCE_TIMEOUT", 20*time.Second),
+		SourceRetries:       retries,
+		SourceRetryJitter:   envDuration("FPL_SOURCE_RETRY_JITTER", 100*time.Millisecond),
+		SourceMaxConcurrent: maxConcurrent,
+		SyncWorkers:         workers,
+		Environment:         configEnv("APP_ENV", "local"),
+		DatabaseMaxConns:    maxConns,
+		DatabaseMaxIdle:     maxIdle,
+		DatabasePing:        envDuration("DB_PING_TIMEOUT", 3*time.Second),
+		ShutdownTimeout:     envDuration("SHUTDOWN_TIMEOUT", 10*time.Second),
 	}, nil
 }
 
