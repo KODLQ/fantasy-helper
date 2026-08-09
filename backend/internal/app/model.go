@@ -121,6 +121,10 @@ type SyncStatus struct {
 	FinishedAt      time.Time `json:"finishedAt,omitempty"`
 	Checksum        string    `json:"checksum,omitempty"`
 	Freshness       Freshness `json:"freshness"`
+	TotalWork       int       `json:"totalWork,omitempty"`
+	CompletedWork   int       `json:"completedWork,omitempty"`
+	FailedWork      int       `json:"failedWork,omitempty"`
+	RetryableWork   int       `json:"retryableWork,omitempty"`
 }
 
 type SyncWorkItem struct {

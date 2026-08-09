@@ -42,6 +42,7 @@ func (a *API) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", a.health)
 	mux.HandleFunc("/api/v1/sync/status", a.syncStatus)
+	mux.HandleFunc("/api/v1/sync/runs/", a.syncRun)
 	mux.HandleFunc("/api/v1/data/snapshots", a.dataSnapshots)
 	mux.HandleFunc("/api/v1/sync", a.sync)
 	mux.HandleFunc("/api/v1/players", a.players)
@@ -112,7 +113,36 @@ func (a *API) health(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "ok", "database": dbOK, "sync": status.Status, "players": len(a.Store.AllPlayers())})
 }
 func (a *API) syncStatus(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, a.Store.SyncStatus())
+	status := a.Store.SyncStatus()
+	if repository, ok := a.Repository.(SyncStatusRepository); ok {
+		if loaded, err := repository.LoadLatestSyncStatus(r.Context()); err == nil {
+			status = loaded
+		}
+	}
+	writeEnvelope(w, http.StatusOK, w.Header().Get("X-Request-ID"), status.Scope, status.Freshness, status)
+}
+func (a *API) syncRun(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost || !strings.HasSuffix(strings.TrimRight(r.URL.Path, "/"), "/retry") {
+		writeContractError(w, http.StatusMethodNotAllowed, w.Header().Get("X-Request-ID"), "method_not_allowed", "Use POST /api/v1/sync/runs/{id}/retry.", false, nil)
+		return
+	}
+	path := strings.TrimSuffix(strings.TrimPrefix(strings.TrimRight(r.URL.Path, "/"), "/api/v1/sync/runs/"), "/retry")
+	runID, err := strconv.ParseInt(path, 10, 64)
+	if err != nil || runID <= 0 {
+		writeContractError(w, http.StatusBadRequest, w.Header().Get("X-Request-ID"), "invalid_run_id", "The sync run ID is invalid.", false, nil)
+		return
+	}
+	repository, ok := a.Repository.(SyncStatusRepository)
+	if !ok {
+		writeContractError(w, http.StatusNotImplemented, w.Header().Get("X-Request-ID"), "sync_retry_unavailable", "Sync retry is not available without PostgreSQL.", false, nil)
+		return
+	}
+	status, err := repository.RetrySyncRun(r.Context(), runID)
+	if err != nil {
+		writeContractError(w, http.StatusConflict, w.Header().Get("X-Request-ID"), "sync_retry_failed", "The sync run could not be retried.", true, nil)
+		return
+	}
+	writeEnvelope(w, http.StatusAccepted, w.Header().Get("X-Request-ID"), status.Scope, status.Freshness, status)
 }
 func (a *API) dataSnapshots(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -201,7 +231,7 @@ func (a *API) sync(w http.ResponseWriter, r *http.Request) {
 		_ = a.Repository.RecordSyncStatus(r.Context(), running)
 	}
 	go a.runSync(scope, running.RunID)
-	writeJSON(w, http.StatusAccepted, a.Store.SyncStatus())
+	writeEnvelope(w, http.StatusAccepted, w.Header().Get("X-Request-ID"), scope, a.Store.Freshness(), a.Store.SyncStatus())
 }
 func (a *API) runSync(scope Scope, runID int64) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)

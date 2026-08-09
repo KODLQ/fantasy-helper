@@ -41,9 +41,9 @@
 - [ ] 4.1 Replace production in-memory reads with PostgreSQL repositories while preserving existing API response contracts.
 - [ ] 4.2 Add dataset-level freshness and partial-sync metadata to research and recommendation responses.
 - [ ] 4.3 Add read models for rolling form, price/value changes, availability, fixture context, and historical gameweek analysis.
-- [ ] 4.4 Add database-backed sync status, stage progress, diagnostics summary, and retry endpoints.
+- [x] 4.4 Add database-backed sync status, stage progress, diagnostics summary, and retry endpoints.
 - [ ] 4.5 Keep the in-memory store as a fixture-backed unit-test implementation only.
-- [ ] 4.6 Add `/api/v1/data/snapshots`, scoped sync request, retry-run, and common freshness response contracts.
+- [x] 4.6 Add `/api/v1/data/snapshots`, scoped sync request, retry-run, and common freshness response contracts.
 - [ ] 4.7 Add repository query methods that require explicit season/gameweek/snapshot scope for historical reads.
 
 ## 5. Verification and rollout

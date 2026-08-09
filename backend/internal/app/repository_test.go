@@ -195,7 +195,21 @@ func TestPostgresSyncWorkQueueClaimsIdempotently(t *testing.T) {
 	if err != nil || !ok || claimed.Attempts != 1 {
 		t.Fatalf("unexpected claim: %#v ok=%v err=%v", claimed, ok, err)
 	}
-	if err := repository.CompleteSyncWork(ctx, claimed.ID); err != nil {
+	if err := repository.FailSyncWork(ctx, claimed.ID, fmt.Errorf("temporary test failure"), false); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.FinishSyncRun(ctx, runID, SyncStatus{Status: "failed", FinishedAt: time.Now().UTC(), Scope: scope}); err != nil {
+		t.Fatal(err)
+	}
+	retried, err := repository.RetrySyncRun(ctx, runID)
+	if err != nil || retried.Status != "running" {
+		t.Fatalf("retry did not reopen run: %#v err=%v", retried, err)
+	}
+	reclaimed, ok, err := repository.ClaimSyncWork(ctx, runID)
+	if err != nil || !ok || reclaimed.Attempts != 2 {
+		t.Fatalf("retry did not requeue work: %#v ok=%v err=%v", reclaimed, ok, err)
+	}
+	if err := repository.CompleteSyncWork(ctx, reclaimed.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok, err := repository.ClaimSyncWork(ctx, runID); err != nil || ok {
@@ -203,6 +217,13 @@ func TestPostgresSyncWorkQueueClaimsIdempotently(t *testing.T) {
 	}
 	if err := repository.FinishSyncRun(ctx, runID, SyncStatus{Status: "success", FinishedAt: time.Now().UTC(), Scope: scope}); err != nil {
 		t.Fatal(err)
+	}
+	loaded, err := repository.LoadLatestSyncStatus(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.RunID != runID || loaded.Status != "success" || loaded.TotalWork != 1 || loaded.CompletedWork != 1 || loaded.FailedWork != 0 || loaded.RetryableWork != 0 {
+		t.Fatalf("unexpected persisted sync status: %#v", loaded)
 	}
 	if _, err := repository.StartSyncRun(ctx, scope, "after-completion"); err != nil {
 		t.Fatalf("completed scope remained locked: %v", err)

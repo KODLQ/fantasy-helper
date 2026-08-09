@@ -43,6 +43,11 @@ type DatasetFreshnessRepository interface {
 	CurrentDatasetFreshness(context.Context, Scope) (Freshness, error)
 }
 
+type SyncStatusRepository interface {
+	LoadLatestSyncStatus(context.Context) (SyncStatus, error)
+	RetrySyncRun(context.Context, int64) (SyncStatus, error)
+}
+
 type SourcePayloadRepository interface {
 	RecordSourceObservation(context.Context, SourceObservation) error
 }
@@ -90,6 +95,72 @@ func (r *PostgresRepository) FinishSyncRun(ctx context.Context, runID int64, sta
 		return fmt.Errorf("finish sync run: %w", err)
 	}
 	return nil
+}
+
+func (r *PostgresRepository) LoadLatestSyncStatus(ctx context.Context) (SyncStatus, error) {
+	var status SyncStatus
+	var scope, warning, checksum sql.NullString
+	var seasonID, gameweek sql.NullInt64
+	var finished sql.NullTime
+	err := r.db.QueryRowContext(ctx, `SELECT id, status, scope, season_source_id, gameweek_source_id, started_at, finished_at, warning, checksum FROM sync_runs ORDER BY started_at DESC, id DESC LIMIT 1`).Scan(&status.RunID, &status.Status, &scope, &seasonID, &gameweek, &status.StartedAt, &finished, &warning, &checksum)
+	if err == sql.ErrNoRows {
+		return SyncStatus{Status: "empty", Freshness: Freshness{Status: "unavailable", State: "unavailable"}}, nil
+	}
+	if err != nil {
+		return SyncStatus{}, fmt.Errorf("load latest sync status: %w", err)
+	}
+	status.Scope.Dataset = scope.String
+	if seasonID.Valid {
+		status.Scope.SeasonID = int(seasonID.Int64)
+	}
+	if gameweek.Valid {
+		status.Scope.Gameweek = int(gameweek.Int64)
+	}
+	if finished.Valid {
+		status.FinishedAt = finished.Time
+	}
+	if warning.Valid {
+		status.Warning = warning.String
+	}
+	if checksum.Valid {
+		status.Checksum = checksum.String
+	}
+	stageRows, err := r.db.QueryContext(ctx, `SELECT stage, status FROM sync_stages WHERE sync_run_id=$1 ORDER BY id`, status.RunID)
+	if err != nil {
+		return SyncStatus{}, err
+	}
+	for stageRows.Next() {
+		var stage, stageStatus string
+		if err := stageRows.Scan(&stage, &stageStatus); err != nil {
+			stageRows.Close()
+			return SyncStatus{}, err
+		}
+		if stageStatus == "success" {
+			status.CompletedStages = append(status.CompletedStages, stage)
+		} else {
+			status.FailedStages = append(status.FailedStages, stage)
+		}
+	}
+	stageRows.Close()
+	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*), COUNT(*) FILTER (WHERE status='success'), COUNT(*) FILTER (WHERE status='failed'), COUNT(*) FILTER (WHERE status='retryable') FROM sync_work_items WHERE sync_run_id=$1`, status.RunID).Scan(&status.TotalWork, &status.CompletedWork, &status.FailedWork, &status.RetryableWork); err != nil {
+		return SyncStatus{}, err
+	}
+	freshness, err := r.CurrentDatasetFreshness(ctx, status.Scope)
+	if err != nil {
+		return SyncStatus{}, err
+	}
+	status.Freshness = freshness
+	return status, nil
+}
+
+func (r *PostgresRepository) RetrySyncRun(ctx context.Context, runID int64) (SyncStatus, error) {
+	if _, err := r.db.ExecContext(ctx, `UPDATE sync_work_items SET status='pending', available_at=NOW(), last_error=NULL, claimed_at=NULL, completed_at=NULL WHERE sync_run_id=$1 AND status IN ('failed','retryable')`, runID); err != nil {
+		return SyncStatus{}, fmt.Errorf("retry sync work: %w", err)
+	}
+	if _, err := r.db.ExecContext(ctx, `UPDATE sync_runs SET status='running', finished_at=NULL, warning=NULL WHERE id=$1 AND status IN ('failed','partial')`, runID); err != nil {
+		return SyncStatus{}, fmt.Errorf("retry sync run: %w", err)
+	}
+	return r.LoadLatestSyncStatus(ctx)
 }
 
 func (r *PostgresRepository) EnqueueSyncWork(ctx context.Context, runID int64, items []SyncWorkItem) error {
