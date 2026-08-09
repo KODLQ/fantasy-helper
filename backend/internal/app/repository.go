@@ -53,9 +53,40 @@ type SyncStageRepository interface {
 }
 
 type WarehouseFactRepository interface {
+	UpsertPlayerSnapshots(context.Context, string, int, time.Time, []Player) error
 	UpsertFixtureStats(context.Context, int, time.Time, []SourceFixture) error
 	UpsertLiveGameweek(context.Context, string, int, int, bool, time.Time, []LivePlayerStats) error
 	LiveGameweekFactsUnchanged(context.Context, int, int, []LivePlayerStats) (bool, error)
+}
+
+func (r *PostgresRepository) UpsertPlayerSnapshots(ctx context.Context, snapshotID string, seasonSourceID int, observedAt time.Time, players []Player) error {
+	if snapshotID == "" || seasonSourceID <= 0 || observedAt.IsZero() {
+		return fmt.Errorf("player snapshots require snapshot, season, and observation time")
+	}
+	payload, err := json.Marshal(players)
+	if err != nil {
+		return fmt.Errorf("encode player snapshot batch: %w", err)
+	}
+	_, err = r.db.ExecContext(ctx, `INSERT INTO player_snapshots (snapshot_id, player_id, team_id, observed_at, price, status, chance_of_playing_next_round, selected_by_percent, form, total_points, minutes, value, raw) SELECT $1, p.id, p.team_id, $3, x.price, x.status, x.chance, x.selected, x.form, x.points, x.minutes, x.value, x.raw FROM jsonb_to_recordset($4::jsonb) AS x(source_id INTEGER, price NUMERIC, status TEXT, chance INTEGER, selected NUMERIC, form NUMERIC, points INTEGER, minutes INTEGER, value NUMERIC, raw JSONB) JOIN seasons s ON s.source_id=$2 JOIN players p ON p.season_id=s.id AND p.source_id=x.source_id ON CONFLICT (snapshot_id, player_id) DO UPDATE SET team_id=EXCLUDED.team_id, observed_at=EXCLUDED.observed_at, price=EXCLUDED.price, status=EXCLUDED.status, chance_of_playing_next_round=EXCLUDED.chance_of_playing_next_round, selected_by_percent=EXCLUDED.selected_by_percent, form=EXCLUDED.form, total_points=EXCLUDED.total_points, minutes=EXCLUDED.minutes, value=EXCLUDED.value, raw=EXCLUDED.raw`, snapshotID, seasonSourceID, observedAt, playerSnapshotBatchPayload(players, payload))
+	if err != nil {
+		return fmt.Errorf("upsert player snapshot batch: %w", err)
+	}
+	return nil
+}
+
+func playerSnapshotBatchPayload(players []Player, raw []byte) []byte {
+	var rawPlayers []json.RawMessage
+	_ = json.Unmarshal(raw, &rawPlayers)
+	rows := make([]map[string]interface{}, 0, len(players))
+	for index, player := range players {
+		row := map[string]interface{}{"source_id": player.ID, "price": player.Price, "status": player.Status, "chance": player.ChanceOfPlaying, "selected": player.SelectedByPercent, "form": player.Form, "points": player.TotalPoints, "minutes": player.Minutes, "value": player.Value}
+		if index < len(rawPlayers) {
+			row["raw"] = rawPlayers[index]
+		}
+		rows = append(rows, row)
+	}
+	payload, _ := json.Marshal(rows)
+	return payload
 }
 
 type SourcePayloadRepository interface {
@@ -798,11 +829,9 @@ func (r *PostgresRepository) UpsertSnapshot(ctx context.Context, snapshot Snapsh
 				return fmt.Errorf("upsert fixture %d: %w", fixture.ID, err)
 			}
 		}
+		seasonHistoryBatch := make([]map[string]interface{}, 0, len(snapshot.Histories))
+		gameweekHistoryBatch := []map[string]interface{}{}
 		for playerID, history := range snapshot.Histories {
-			dbPlayerID, ok := players[playerID]
-			if !ok {
-				continue
-			}
 			var minutes, goals, assists, cleanSheets, points int
 			for _, item := range history {
 				minutes += item.Minutes
@@ -810,18 +839,26 @@ func (r *PostgresRepository) UpsertSnapshot(ctx context.Context, snapshot Snapsh
 				assists += item.Assists
 				cleanSheets += item.CleanSheets
 				points += item.TotalPoints
+				gameweekHistoryBatch = append(gameweekHistoryBatch, map[string]interface{}{"player": playerID, "gameweek": item.Gameweek, "minutes": item.Minutes, "points": item.TotalPoints, "goals": item.Goals, "assists": item.Assists, "clean_sheets": item.CleanSheets, "bonus": item.Bonus, "value": item.Value})
 			}
-			if _, err := tx.ExecContext(ctx, `INSERT INTO player_season_history (player_id, season_id, source_id, minutes, goals_scored, assists, clean_sheets, total_points) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (player_id,season_id,source_id) DO UPDATE SET minutes=EXCLUDED.minutes, goals_scored=EXCLUDED.goals_scored, assists=EXCLUDED.assists, clean_sheets=EXCLUDED.clean_sheets, total_points=EXCLUDED.total_points`, dbPlayerID, seasonID, playerID, minutes, goals, assists, cleanSheets, points); err != nil {
-				return err
+			seasonHistoryBatch = append(seasonHistoryBatch, map[string]interface{}{"player": playerID, "minutes": minutes, "goals": goals, "assists": assists, "clean_sheets": cleanSheets, "points": points})
+		}
+		if len(seasonHistoryBatch) > 0 {
+			payload, err := json.Marshal(seasonHistoryBatch)
+			if err != nil {
+				return fmt.Errorf("encode season history batch: %w", err)
 			}
-			for _, item := range history {
-				weekID, ok := weeks[item.Gameweek]
-				if !ok {
-					continue
-				}
-				if _, err := tx.ExecContext(ctx, `INSERT INTO player_gameweek_history (player_id, season_id, gameweek_id, minutes, total_points, goals_scored, assists, clean_sheets, bonus, value) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT (player_id,gameweek_id) DO UPDATE SET minutes=EXCLUDED.minutes, total_points=EXCLUDED.total_points, goals_scored=EXCLUDED.goals_scored, assists=EXCLUDED.assists, clean_sheets=EXCLUDED.clean_sheets, bonus=EXCLUDED.bonus, value=EXCLUDED.value`, dbPlayerID, seasonID, weekID, item.Minutes, item.TotalPoints, item.Goals, item.Assists, item.CleanSheets, item.Bonus, item.Value); err != nil {
-					return err
-				}
+			if _, err := tx.ExecContext(ctx, `INSERT INTO player_season_history (player_id, season_id, source_id, minutes, goals_scored, assists, clean_sheets, total_points) SELECT p.id, $1, x.player, x.minutes, x.goals, x.assists, x.clean_sheets, x.points FROM jsonb_to_recordset($2::jsonb) AS x(player INTEGER, minutes INTEGER, goals INTEGER, assists INTEGER, clean_sheets INTEGER, points INTEGER) JOIN players p ON p.season_id=$1 AND p.source_id=x.player ON CONFLICT (player_id,season_id,source_id) DO UPDATE SET minutes=EXCLUDED.minutes, goals_scored=EXCLUDED.goals_scored, assists=EXCLUDED.assists, clean_sheets=EXCLUDED.clean_sheets, total_points=EXCLUDED.total_points`, seasonID, payload); err != nil {
+				return fmt.Errorf("upsert season history batch: %w", err)
+			}
+		}
+		if len(gameweekHistoryBatch) > 0 {
+			payload, err := json.Marshal(gameweekHistoryBatch)
+			if err != nil {
+				return fmt.Errorf("encode gameweek history batch: %w", err)
+			}
+			if _, err := tx.ExecContext(ctx, `INSERT INTO player_gameweek_history (player_id, season_id, gameweek_id, minutes, total_points, goals_scored, assists, clean_sheets, bonus, value) SELECT p.id, $1, g.id, x.minutes, x.points, x.goals, x.assists, x.clean_sheets, x.bonus, x.value FROM jsonb_to_recordset($2::jsonb) AS x(player INTEGER, gameweek INTEGER, minutes INTEGER, points INTEGER, goals INTEGER, assists INTEGER, clean_sheets INTEGER, bonus INTEGER, value NUMERIC) JOIN players p ON p.season_id=$1 AND p.source_id=x.player JOIN gameweeks g ON g.season_id=$1 AND g.source_id=x.gameweek ON CONFLICT (player_id,gameweek_id) DO UPDATE SET minutes=EXCLUDED.minutes, total_points=EXCLUDED.total_points, goals_scored=EXCLUDED.goals_scored, assists=EXCLUDED.assists, clean_sheets=EXCLUDED.clean_sheets, bonus=EXCLUDED.bonus, value=EXCLUDED.value`, seasonID, payload); err != nil {
+				return fmt.Errorf("upsert gameweek history batch: %w", err)
 			}
 		}
 		return nil

@@ -34,7 +34,7 @@
 - [x] 3.8 Add configurable timeout, retry, jitter, `Retry-After`, and per-host concurrency behavior with metrics.
 - [x] 3.9 Add catalog, fixture, live, finalization, and reconciliation cadence policies with scheduler tests.
 - [x] 3.10 Add coordinator cancellation, shutdown wait, correlation IDs, sync metrics, and duplicate-scope locking.
-- [ ] 3.11 Batch snapshot/history writes and test last-known-good merge plus explicit cache refresh after commit.
+- [x] 3.11 Batch snapshot/history writes and test last-known-good merge plus explicit cache refresh after commit.
 
 ## 4. API and analytical read models
 

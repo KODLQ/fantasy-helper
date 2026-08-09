@@ -70,12 +70,13 @@ func TestFullSyncPersistsSourceParityThroughPostgresQueue(t *testing.T) {
 
 	counts := map[string]int{}
 	for name, query := range map[string]string{
-		"players":        `SELECT COUNT(*) FROM players`,
-		"fixtures":       `SELECT COUNT(*) FROM fixtures`,
-		"histories":      `SELECT COUNT(*) FROM player_gameweek_history`,
-		"liveFacts":      `SELECT COUNT(*) FROM player_gameweek_facts`,
-		"fixtureStats":   `SELECT COUNT(*) FROM fixture_stats`,
-		"sourcePayloads": `SELECT COUNT(*) FROM source_payloads`,
+		"players":         `SELECT COUNT(*) FROM players`,
+		"fixtures":        `SELECT COUNT(*) FROM fixtures`,
+		"histories":       `SELECT COUNT(*) FROM player_gameweek_history`,
+		"playerSnapshots": `SELECT COUNT(*) FROM player_snapshots`,
+		"liveFacts":       `SELECT COUNT(*) FROM player_gameweek_facts`,
+		"fixtureStats":    `SELECT COUNT(*) FROM fixture_stats`,
+		"sourcePayloads":  `SELECT COUNT(*) FROM source_payloads`,
 	} {
 		var count int
 		if err := database.QueryRowContext(ctx, query).Scan(&count); err != nil {
@@ -83,7 +84,7 @@ func TestFullSyncPersistsSourceParityThroughPostgresQueue(t *testing.T) {
 		}
 		counts[name] = count
 	}
-	if counts["players"] != 2 || counts["fixtures"] != 1 || counts["histories"] != 2 || counts["liveFacts"] != 2 || counts["fixtureStats"] != 1 || counts["sourcePayloads"] != 5 {
+	if counts["players"] != 2 || counts["fixtures"] != 1 || counts["histories"] != 2 || counts["playerSnapshots"] != 2 || counts["liveFacts"] != 2 || counts["fixtureStats"] != 1 || counts["sourcePayloads"] != 5 {
 		t.Fatalf("source/database count parity failed: %#v", counts)
 	}
 	var totalPoints, livePoints int

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,6 +12,21 @@ import (
 	"testing"
 	"time"
 )
+
+type failingSnapshotRepository struct{}
+
+func (failingSnapshotRepository) EnsureSchema(context.Context) error { return nil }
+func (failingSnapshotRepository) LoadSnapshot(context.Context) (Snapshot, bool, error) {
+	return Snapshot{}, false, nil
+}
+func (failingSnapshotRepository) LoadSquad(context.Context) (Squad, bool, error) {
+	return Squad{}, false, nil
+}
+func (failingSnapshotRepository) SaveSquad(context.Context, Squad) error { return nil }
+func (failingSnapshotRepository) UpsertSnapshot(context.Context, Snapshot) error {
+	return fmt.Errorf("forced database failure")
+}
+func (failingSnapshotRepository) RecordSyncStatus(context.Context, SyncStatus) error { return nil }
 
 func TestAPIResearchSquadAndRecommendationFlow(t *testing.T) {
 	store := NewStore()
@@ -230,5 +246,27 @@ func TestLiveFinalizedUsesExplicitSourceThenCheckedEvent(t *testing.T) {
 	}
 	if !liveFinalized([]SourceEvent{{ID: 1, Finished: true, DataChecked: true}}, finishedFixtures, 1, nil, true) {
 		t.Fatal("stable checked event with finished fixtures should finalize")
+	}
+}
+
+func TestSyncRefreshesCacheOnlyAfterDatabaseCommit(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path != "/bootstrap-static/" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(`{"season_id":2026,"season_name":"2026/27","events":[{"id":1,"name":"Gameweek 1","is_current":true}],"phases":[],"game_settings":{},"element_types":[{"id":1,"singular_name":"Goalkeeper","plural_name":"Goalkeepers"}],"teams":[{"id":1,"name":"Home","short_name":"HOM"}],"elements":[{"id":1000,"first_name":"New","second_name":"Player","web_name":"New","element_type":1,"team":1,"now_cost":50,"form":"1","value_form":"1","status":"a"}]}`))
+	}))
+	defer server.Close()
+	store := NewStore()
+	store.SetSyncStatus(SyncStatus{Status: "running", Scope: Scope{Dataset: "catalog"}, CompletedStages: []string{}, FailedStages: []string{}, Freshness: store.Freshness()})
+	api := NewAPI(store, NewFPLSourceWithSeason(server.URL, 2026, "2026/27"), nil, nil, failingSnapshotRepository{})
+	api.runSync(context.Background(), Scope{Dataset: "catalog"}, 0)
+	if _, found := store.Player(1000); found {
+		t.Fatal("uncommitted source data leaked into the cache")
+	}
+	if status := store.SyncStatus(); status.Status != "failed" || !strings.Contains(status.Warning, "database snapshot persistence failed") {
+		t.Fatalf("unexpected failed sync status: %#v", status)
 	}
 }

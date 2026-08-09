@@ -497,6 +497,10 @@ func (a *API) runSync(ctx context.Context, scope Scope, runID int64) {
 	}
 	if hasFactRepository {
 		observedAt := time.Now().UTC()
+		if err := factRepository.UpsertPlayerSnapshots(ctx, snapshotID, season.ID, observedAt, players); err != nil {
+			a.failStage(ctx, &status, "catalog", fmt.Errorf("player snapshot persistence failed: %w", err))
+			return
+		}
 		if needsFixtures {
 			if err := factRepository.UpsertFixtureStats(ctx, season.ID, observedAt, fixtureFeed.Fixtures); err != nil {
 				a.failStage(ctx, &status, "fixtures", fmt.Errorf("fixture statistics persistence failed: %w", err))
