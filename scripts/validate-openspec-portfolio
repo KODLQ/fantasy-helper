@@ -9,6 +9,7 @@ require "date"
 ROOT = File.expand_path("..", __dir__)
 OPEN_SPEC_ROOT = File.join(ROOT, "openspec")
 CHANGES_ROOT = File.join(OPEN_SPEC_ROOT, "changes")
+ARCHIVE_ROOT = File.join(CHANGES_ROOT, "archive")
 
 def fail_check(message)
   warn "OpenSpec portfolio validation failed: #{message}"
@@ -31,17 +32,32 @@ fail_check("missing openspec/fpl-rules.yaml") unless File.file?(rules_path)
 registry = load_yaml(dependencies_path)
 changes = registry.fetch("changes")
 order = registry.fetch("ci").fetch("order")
-change_names = Dir.children(CHANGES_ROOT).select { |name| File.directory?(File.join(CHANGES_ROOT, name)) }.to_set
+active_change_paths = Dir.children(CHANGES_ROOT).each_with_object({}) do |name, paths|
+  path = File.join(CHANGES_ROOT, name)
+  paths[name] = path if name != "archive" && File.directory?(path)
+end
+archived_change_paths = Dir.glob(File.join(ARCHIVE_ROOT, "*")).each_with_object({}) do |path, paths|
+  next unless File.directory?(path)
+
+  match = File.basename(path).match(/\A\d{4}-\d{2}-\d{2}-(.+)\z/)
+  fail_check("archive directory is not date-prefixed: #{path}") unless match
+  paths[match[1]] = path
+end
+duplicate_change_names = active_change_paths.keys & archived_change_paths.keys
+fail_check("changes are both active and archived: #{duplicate_change_names.join(', ')}") unless duplicate_change_names.empty?
+change_paths = archived_change_paths.merge(active_change_paths)
+change_names = change_paths.keys.to_set
 
 fail_check("dependency order contains duplicates") unless order.uniq.length == order.length
-fail_check("dependency order does not cover every change") unless order.to_set == change_names
+fail_check("dependency registry does not cover every active and archived change") unless changes.keys.to_set == change_names
+fail_check("dependency order does not cover every registered change") unless order.to_set == changes.keys.to_set
 
 changes.each do |name, config|
   fail_check("registry references missing change #{name}") unless change_names.include?(name)
   fail_check("#{name} has no owner") if config["owner"].to_s.empty?
   fail_check("#{name} owner is not the change itself") unless config["owner"] == name
 
-  metadata_path = File.join(CHANGES_ROOT, name, ".openspec.yaml")
+  metadata_path = File.join(change_paths.fetch(name), ".openspec.yaml")
   metadata = load_yaml(metadata_path)
   expected = Array(config["dependsOn"])
   actual = Array(metadata["dependsOn"])
@@ -97,7 +113,7 @@ fail_check("warehouse does not own its source contract") unless warehouse.includ
 fail_check("warehouse does not own the common response contract") unless warehouse.include?("common-response-contract")
 repository_path = File.join(ROOT, "backend", "internal", "app", "repository.go")
 repository_text = File.read(repository_path)
-warehouse_tasks_path = File.join(CHANGES_ROOT, "fpl-public-data-warehouse", "tasks.md")
+warehouse_tasks_path = File.join(change_paths.fetch("fpl-public-data-warehouse"), "tasks.md")
 warehouse_delivery_complete = !File.read(warehouse_tasks_path).include?("- [ ]")
 if warehouse_delivery_complete && repository_text.match?(/CREATE\s+(TABLE|INDEX)|schemaStatements/i)
   fail_check("application repository embeds schema DDL; migrations must remain the warehouse schema authority")
@@ -106,11 +122,11 @@ auth = changes.fetch("local-user-authentication").fetch("authoritativeCapabiliti
 fail_check("authentication ownership is missing workspace ownership") unless auth.include?("user-workspace-ownership")
 fail_check("technical debt claims account/session ownership") if changes.fetch("technical-debt-foundation").fetch("authoritativeCapabilities").any? { |capability| capability.match?(/auth|session|ownership/i) }
 
-stdout, stderr, status = Open3.capture3("openspec", "validate", "--changes", "--strict", "--no-interactive", chdir: ROOT)
+stdout, stderr, status = Open3.capture3("openspec", "validate", "--all", "--strict", "--no-interactive", chdir: ROOT)
 unless status.success?
   warn stdout
   warn stderr
   fail_check("openspec strict validation failed")
 end
 
-puts "OpenSpec portfolio validation passed (#{changes.length} changes, #{owners.length} capabilities, #{formulas.fetch('formulas').length} formulas)."
+puts "OpenSpec portfolio validation passed (#{active_change_paths.length} active changes, #{archived_change_paths.length} archived changes, #{owners.length} capabilities, #{formulas.fetch('formulas').length} formulas)."
