@@ -185,6 +185,14 @@ type DatasetSnapshot struct {
 	MissingInputs     []string  `json:"missingInputs"`
 }
 
+type PlayerDetail struct {
+	Player    Player          `json:"player"`
+	Team      Team            `json:"team"`
+	History   []PlayerHistory `json:"history"`
+	Fixtures  []Fixture       `json:"fixtures"`
+	Freshness Freshness       `json:"freshness"`
+}
+
 type Squad struct {
 	Name              string            `json:"name"`
 	Budget            float64           `json:"budget"`

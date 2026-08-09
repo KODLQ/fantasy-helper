@@ -87,6 +87,14 @@ func writeEnvelope(w http.ResponseWriter, status int, requestID string, scope Sc
 func writeContractError(w http.ResponseWriter, status int, requestID, code, message string, retryable bool, details interface{}) {
 	writeJSON(w, status, map[string]interface{}{"error": ResponseError{Code: code, Message: message, Retryable: retryable, Details: details}, "meta": ResponseMeta{RequestID: requestID}})
 }
+func (a *API) requestFreshness(ctx context.Context, scope Scope) Freshness {
+	if repository, ok := a.Repository.(DatasetFreshnessRepository); ok {
+		if freshness, err := repository.CurrentDatasetFreshness(ctx, scope); err == nil && freshness.State != "" {
+			return freshness
+		}
+	}
+	return a.Store.Freshness()
+}
 func parseInt(value string, fallback int) int {
 	n, err := strconv.Atoi(value)
 	if err != nil {
@@ -115,7 +123,7 @@ func (a *API) dataSnapshots(w http.ResponseWriter, r *http.Request) {
 	scope := Scope{SeasonID: parseInt(query.Get("seasonId"), 0), Gameweek: parseInt(query.Get("gameweek"), 0), Dataset: query.Get("dataset")}
 	if snapshotRepository, ok := a.Repository.(DatasetSnapshotRepository); ok {
 		if snapshots, err := snapshotRepository.ListDatasetSnapshots(r.Context(), scope); err == nil {
-			writeEnvelope(w, http.StatusOK, w.Header().Get("X-Request-ID"), scope, a.Store.Freshness(), map[string]interface{}{"items": snapshots})
+			writeEnvelope(w, http.StatusOK, w.Header().Get("X-Request-ID"), scope, a.requestFreshness(r.Context(), scope), map[string]interface{}{"items": snapshots})
 			return
 		}
 	}
@@ -149,7 +157,7 @@ func (a *API) dataSnapshots(w http.ResponseWriter, r *http.Request) {
 	if scope.Dataset == "" {
 		scope.Dataset = "public-fpl"
 	}
-	writeEnvelope(w, http.StatusOK, w.Header().Get("X-Request-ID"), scope, status.Freshness, map[string]interface{}{"items": []DatasetSnapshot{item}})
+	writeEnvelope(w, http.StatusOK, w.Header().Get("X-Request-ID"), scope, a.requestFreshness(r.Context(), scope), map[string]interface{}{"items": []DatasetSnapshot{item}})
 }
 func (a *API) sync(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -419,10 +427,35 @@ func (a *API) players(w http.ResponseWriter, r *http.Request) {
 	}
 	q := r.URL.Query()
 	query := PlayerQuery{Search: q.Get("search"), Position: parseInt(q.Get("position"), 0), TeamID: parseInt(q.Get("teamId"), 0), MinPrice: parseFloatParam(q.Get("minPrice")), MaxPrice: parseFloatParam(q.Get("maxPrice")), MinMinutes: parseInt(q.Get("minMinutes"), 0), MinForm: parseFloatParam(q.Get("minForm")), MinPoints: parseInt(q.Get("minPoints"), 0), MinValue: parseFloatParam(q.Get("minValue")), Status: q.Get("status"), Sort: q.Get("sort"), Desc: q.Get("direction") != "asc", Page: parseInt(q.Get("page"), 1), PageSize: parseInt(q.Get("pageSize"), 25)}
-	results, total := a.Store.SearchPlayers(query)
-	writeJSON(w, http.StatusOK, map[string]interface{}{"items": results, "total": total, "page": query.Page, "pageSize": query.PageSize, "freshness": a.Store.Freshness()})
+	var results []Player
+	var total int
+	if researchRepository, ok := a.Repository.(ResearchReadRepository); ok {
+		loaded, loadedTotal, err := researchRepository.SearchPlayers(r.Context(), query)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "research_unavailable", "Player research is temporarily unavailable.", nil)
+			return
+		}
+		results, total = loaded, loadedTotal
+	} else {
+		results, total = a.Store.SearchPlayers(query)
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"items": results, "total": total, "page": query.Page, "pageSize": query.PageSize, "freshness": a.requestFreshness(r.Context(), Scope{Dataset: "public-fpl"})})
 }
 func (a *API) playerDetail(w http.ResponseWriter, r *http.Request, id int) {
+	if researchRepository, ok := a.Repository.(ResearchReadRepository); ok {
+		detail, found, err := researchRepository.LoadPlayerDetail(r.Context(), id)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "player_unavailable", "Player research is temporarily unavailable.", nil)
+			return
+		}
+		if !found {
+			writeError(w, http.StatusNotFound, "player_not_found", "Player not found in the active season.", nil)
+			return
+		}
+		detail.Freshness = a.requestFreshness(r.Context(), Scope{Dataset: "public-fpl"})
+		writeJSON(w, http.StatusOK, detail)
+		return
+	}
 	player, ok := a.Store.Player(id)
 	if !ok {
 		writeError(w, http.StatusNotFound, "player_not_found", "Player not found in the active season.", nil)

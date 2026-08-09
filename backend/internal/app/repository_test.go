@@ -65,6 +65,18 @@ func TestPostgresRepositoryPersistence(t *testing.T) {
 	if err != nil || len(snapshots) != 1 || snapshots[0].State != "actual" || snapshots[0].NormalizerVersion != "fpl-public-v1" {
 		t.Fatalf("unexpected dataset snapshots: %#v err=%v", snapshots, err)
 	}
+	freshness, err := repository.CurrentDatasetFreshness(ctx, Scope{SeasonID: snapshot.Season.ID, Gameweek: 1, Dataset: "player-gameweek"})
+	if err != nil || freshness.State != "actual" || len(freshness.SnapshotIDs) != 1 || freshness.NormalizerVersion != "fpl-public-v1" {
+		t.Fatalf("unexpected dataset freshness: %#v err=%v", freshness, err)
+	}
+	players, total, err := repository.SearchPlayers(ctx, PlayerQuery{Sort: "form", Desc: true, Page: 1, PageSize: 3})
+	if err != nil || len(players) != 3 || total != len(snapshot.Players) {
+		t.Fatalf("unexpected PostgreSQL research result: count=%d total=%d err=%v", len(players), total, err)
+	}
+	detail, found, err := repository.LoadPlayerDetail(ctx, players[0].ID)
+	if err != nil || !found || detail.Player.ID != players[0].ID || detail.Team.ShortName == "" {
+		t.Fatalf("unexpected PostgreSQL player detail: %#v found=%v err=%v", detail, found, err)
+	}
 	loaded, ok, err := repository.LoadSnapshot(ctx)
 	if err != nil || !ok {
 		t.Fatalf("load snapshot: ok=%v err=%v", ok, err)

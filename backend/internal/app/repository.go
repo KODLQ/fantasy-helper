@@ -34,6 +34,15 @@ type DatasetSnapshotRepository interface {
 	CreateDatasetSnapshot(context.Context, DatasetSnapshot) error
 }
 
+type ResearchReadRepository interface {
+	SearchPlayers(context.Context, PlayerQuery) ([]Player, int, error)
+	LoadPlayerDetail(context.Context, int) (PlayerDetail, bool, error)
+}
+
+type DatasetFreshnessRepository interface {
+	CurrentDatasetFreshness(context.Context, Scope) (Freshness, error)
+}
+
 type SourcePayloadRepository interface {
 	RecordSourceObservation(context.Context, SourceObservation) error
 }
@@ -255,6 +264,180 @@ func (r *PostgresRepository) CreateDatasetSnapshot(ctx context.Context, item Dat
 		return fmt.Errorf("create dataset snapshot: %w", err)
 	}
 	return nil
+}
+
+func (r *PostgresRepository) CurrentDatasetFreshness(ctx context.Context, scope Scope) (Freshness, error) {
+	var snapshotID, dataset, state, normalizer string
+	var sourceFetched, normalized sql.NullTime
+	var missing []byte
+	err := r.db.QueryRowContext(ctx, `SELECT d.id::text, d.dataset, d.state, d.source_fetched_at, d.normalized_at, d.normalizer_version, d.missing_inputs FROM dataset_snapshots d JOIN seasons s ON s.id=d.season_id LEFT JOIN gameweeks g ON g.id=d.gameweek_id WHERE ($1=0 OR s.source_id=$1) AND ($2=0 OR g.source_id=$2) AND ($3='' OR d.dataset=$3) ORDER BY d.normalized_at DESC LIMIT 1`, scope.SeasonID, scope.Gameweek, scope.Dataset).Scan(&snapshotID, &dataset, &state, &sourceFetched, &normalized, &normalizer, &missing)
+	if err == sql.ErrNoRows {
+		return Freshness{Status: "unavailable", State: "unavailable", Dataset: scope.Dataset}, nil
+	}
+	if err != nil {
+		return Freshness{}, fmt.Errorf("load dataset freshness: %w", err)
+	}
+	status := "fresh"
+	if state == "partial" || state == "stale" {
+		status = state
+	}
+	if state == "unavailable" {
+		status = "unavailable"
+	}
+	freshness := Freshness{Status: status, State: state, Dataset: dataset, SnapshotIDs: []string{snapshotID}, NormalizerVersion: normalizer}
+	if sourceFetched.Valid {
+		freshness.SourceFetchedAt = sourceFetched.Time
+	}
+	if normalized.Valid {
+		freshness.NormalizedAt = normalized.Time
+		freshness.SnapshotAt = normalized.Time
+		freshness.LastSuccessfulSync = normalized.Time
+	}
+	if len(missing) > 0 {
+		_ = json.Unmarshal(missing, &freshness.MissingInputs)
+	}
+	return freshness, nil
+}
+
+func (r *PostgresRepository) SearchPlayers(ctx context.Context, q PlayerQuery) ([]Player, int, error) {
+	where := []string{"s.is_current"}
+	args := []interface{}{}
+	add := func(clause string, value interface{}) {
+		args = append(args, value)
+		where = append(where, fmt.Sprintf(clause, len(args)))
+	}
+	term := strings.TrimSpace(q.Search)
+	if term != "" {
+		add("(LOWER(p.web_name || ' ' || p.first_name || ' ' || p.second_name) LIKE LOWER('%%' || $%d || '%%'))", term)
+	}
+	if q.Position > 0 {
+		add("p.position=$%d", q.Position)
+	}
+	if q.TeamID > 0 {
+		add("t.source_id=$%d", q.TeamID)
+	}
+	if q.MinPrice > 0 {
+		add("p.price >= $%d", q.MinPrice)
+	}
+	if q.MaxPrice > 0 {
+		add("p.price <= $%d", q.MaxPrice)
+	}
+	if q.MinMinutes > 0 {
+		add("p.minutes >= $%d", q.MinMinutes)
+	}
+	if q.MinForm > 0 {
+		add("p.form >= $%d", q.MinForm)
+	}
+	if q.MinPoints > 0 {
+		add("p.total_points >= $%d", q.MinPoints)
+	}
+	if q.MinValue > 0 {
+		add("p.value >= $%d", q.MinValue)
+	}
+	if q.Status != "" {
+		add("p.status=$%d", q.Status)
+	}
+	sortColumn := map[string]string{"price": "p.price", "form": "p.form", "points": "p.total_points", "minutes": "p.minutes", "value": "p.value"}[q.Sort]
+	if sortColumn == "" {
+		sortColumn = "LOWER(p.web_name)"
+	}
+	direction := "ASC"
+	if q.Desc {
+		direction = "DESC"
+	}
+	page := q.Page
+	if page < 1 {
+		page = 1
+	}
+	size := q.PageSize
+	if size < 1 {
+		size = 25
+	}
+	if size > 100 {
+		size = 100
+	}
+	args = append(args, size, (page-1)*size)
+	query := fmt.Sprintf(`SELECT p.source_id, p.first_name, p.second_name, p.web_name, p.position, t.source_id, p.price, p.total_points, p.form, p.minutes, p.value, p.status, p.news, p.chance_of_playing_next_round, p.goals_scored, p.assists, p.clean_sheets, p.bonus, p.saves, p.expected_minutes, p.recent_returns, COUNT(*) OVER() FROM players p JOIN teams t ON t.id=p.team_id JOIN seasons s ON s.id=p.season_id WHERE %s ORDER BY %s %s, p.source_id LIMIT $%d OFFSET $%d`, strings.Join(where, " AND "), sortColumn, direction, len(args)-1, len(args))
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("search players: %w", err)
+	}
+	defer rows.Close()
+	items := []Player{}
+	total := 0
+	for rows.Next() {
+		item, rowTotal, err := scanPlayerWithTotal(rows)
+		if err != nil {
+			return nil, 0, err
+		}
+		total = rowTotal
+		items = append(items, item)
+	}
+	return items, total, rows.Err()
+}
+
+type rowScanner interface{ Scan(...interface{}) error }
+
+func scanPlayerWithTotal(scanner rowScanner) (Player, int, error) {
+	var item Player
+	var chance sql.NullInt64
+	var total int
+	err := scanner.Scan(&item.ID, &item.FirstName, &item.SecondName, &item.WebName, &item.Position, &item.TeamID, &item.Price, &item.TotalPoints, &item.Form, &item.Minutes, &item.Value, &item.Status, &item.News, &chance, &item.GoalsScored, &item.Assists, &item.CleanSheets, &item.Bonus, &item.Saves, &item.ExpectedMinutes, &item.RecentReturns, &total)
+	if chance.Valid {
+		value := int(chance.Int64)
+		item.ChanceOfPlaying = &value
+	}
+	return item, total, err
+}
+
+func (r *PostgresRepository) LoadPlayerDetail(ctx context.Context, sourcePlayerID int) (PlayerDetail, bool, error) {
+	var detail PlayerDetail
+	var chance sql.NullInt64
+	var teamID int
+	err := r.db.QueryRowContext(ctx, `SELECT p.source_id, p.first_name, p.second_name, p.web_name, p.position, t.source_id, p.price, p.total_points, p.form, p.minutes, p.value, p.status, p.news, p.chance_of_playing_next_round, p.goals_scored, p.assists, p.clean_sheets, p.bonus, p.saves, p.expected_minutes, p.recent_returns, t.name, t.short_name FROM players p JOIN teams t ON t.id=p.team_id JOIN seasons s ON s.id=p.season_id WHERE s.is_current AND p.source_id=$1 ORDER BY s.updated_at DESC LIMIT 1`, sourcePlayerID).Scan(&detail.Player.ID, &detail.Player.FirstName, &detail.Player.SecondName, &detail.Player.WebName, &detail.Player.Position, &teamID, &detail.Player.Price, &detail.Player.TotalPoints, &detail.Player.Form, &detail.Player.Minutes, &detail.Player.Value, &detail.Player.Status, &detail.Player.News, &chance, &detail.Player.GoalsScored, &detail.Player.Assists, &detail.Player.CleanSheets, &detail.Player.Bonus, &detail.Player.Saves, &detail.Player.ExpectedMinutes, &detail.Player.RecentReturns, &detail.Team.Name, &detail.Team.ShortName)
+	if err == sql.ErrNoRows {
+		return PlayerDetail{}, false, nil
+	}
+	if err != nil {
+		return PlayerDetail{}, false, fmt.Errorf("load player detail: %w", err)
+	}
+	detail.Player.TeamID = teamID
+	if chance.Valid {
+		value := int(chance.Int64)
+		detail.Player.ChanceOfPlaying = &value
+	}
+	historyRows, err := r.db.QueryContext(ctx, `SELECT g.source_id, h.minutes, h.total_points, h.goals_scored, h.assists, h.clean_sheets, h.bonus, COALESCE(h.value,0) FROM player_gameweek_history h JOIN players p ON p.id=h.player_id JOIN gameweeks g ON g.id=h.gameweek_id JOIN seasons s ON s.id=h.season_id WHERE s.is_current AND p.source_id=$1 ORDER BY g.source_id`, sourcePlayerID)
+	if err != nil {
+		return PlayerDetail{}, false, err
+	}
+	for historyRows.Next() {
+		var row PlayerHistory
+		if err := historyRows.Scan(&row.Gameweek, &row.Minutes, &row.TotalPoints, &row.Goals, &row.Assists, &row.CleanSheets, &row.Bonus, &row.Value); err != nil {
+			historyRows.Close()
+			return PlayerDetail{}, false, err
+		}
+		detail.History = append(detail.History, row)
+	}
+	if err := historyRows.Err(); err != nil {
+		historyRows.Close()
+		return PlayerDetail{}, false, err
+	}
+	historyRows.Close()
+	fixtureRows, err := r.db.QueryContext(ctx, `SELECT f.source_id, COALESCE(g.source_id,0), f.kickoff_time, f.finished, h.source_id, a.source_id, COALESCE(f.team_home_difficulty,0), COALESCE(f.team_away_difficulty,0), f.team_home_score, f.team_away_score FROM fixtures f JOIN teams h ON h.id=f.team_home_id JOIN teams a ON a.id=f.team_away_id JOIN seasons s ON s.id=f.season_id LEFT JOIN gameweeks g ON g.id=f.gameweek_id WHERE s.is_current AND f.finished=FALSE AND (h.source_id=$1 OR a.source_id=$1) ORDER BY f.kickoff_time NULLS LAST`, teamID)
+	if err != nil {
+		return PlayerDetail{}, false, err
+	}
+	for fixtureRows.Next() {
+		var row Fixture
+		if err := fixtureRows.Scan(&row.ID, &row.Gameweek, &row.KickoffTime, &row.Finished, &row.HomeTeam, &row.AwayTeam, &row.HomeDifficulty, &row.AwayDifficulty, &row.HomeScore, &row.AwayScore); err != nil {
+			fixtureRows.Close()
+			return PlayerDetail{}, false, err
+		}
+		detail.Fixtures = append(detail.Fixtures, row)
+	}
+	fixtureRows.Close()
+	detail.Freshness = Freshness{Status: "fresh", State: "actual", Dataset: "public-fpl"}
+	return detail, true, nil
 }
 
 func (r *PostgresRepository) currentSeasonID(ctx context.Context) (int64, error) {
