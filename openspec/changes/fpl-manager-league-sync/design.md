@@ -53,9 +53,21 @@ Use manager season summaries, gameweek summaries, picks, transfers, chips, and l
 
 Persist the latest active team as an imported squad snapshot containing entry ID, season, gameweek, player IDs, positions, multipliers, captain/vice-captain, bank/value, chips, and source freshness. The UI exposes preview, import-as-new-draft, and replace-planning-squad actions. Synchronization updates the imported snapshot only; it never overwrites the saved planning squad automatically.
 
-### 5. Inject sessions through a credential boundary
+### 5. Inject remote FPL sessions through a per-user privacy boundary
 
-The source client accepts a short-lived cookie/header provider or local secret reference. It redacts cookie values from logs, errors, raw payload metadata, and HTTP diagnostics. The first local implementation may use an environment/file secret reference; a hosted implementation must replace this with a secret manager.
+The local application account/session from `local-user-authentication` is distinct from the remote FPL session. The manager connection belongs to one local `userId` and contains only provider type, redacted status, last validation time, expiry/reauth-needed state when known, and the configured entry ID. It never stores an FPL password and never automates an FPL login.
+
+The first local provider is `memory` or an OS/environment secret reference. If a provider persists a cookie/token, it must encrypt it at rest with a key outside the database, restrict access to the owning local user/process, and support revocation/deletion. Raw cookie/header values are never stored in ordinary PostgreSQL rows, raw source payloads, diagnostics, logs, traces, API responses, browser storage, or Playwright artifacts. A private request uses the secret only in memory at the transport boundary and immediately redacts it from errors.
+
+Remote session lifecycle:
+
+1. The user explicitly supplies a session through the configured provider and associates it with an entry ID.
+2. The provider validates `/me/` or `/my-team/{entryId}/` and records only redacted status/provenance.
+3. A 401/403 marks the connection `reauth_required` or `permission_denied`, stops private retries, retains prior manager facts, and leaves public sync unaffected.
+4. Logout/disconnect/revocation removes the secret from the provider and deletes or anonymizes private connection metadata according to retention policy.
+5. A manager response and all derived private records are scoped by the local owner; another local user cannot infer the existence or status of the connection.
+
+Privacy defaults retain canonical manager facts for the configured season/gameweek retention window, retain redacted provenance for the audit window, and delete raw private response bodies after the shorter private-payload window. The user can request private-data export and deletion; deletion removes owned connection secrets and private derived records but never shared public warehouse facts.
 
 ### 6. Treat standings pagination as durable work
 
@@ -87,7 +99,7 @@ The initial API contract is:
 - `GET /api/v1/squad/import/preview?entryId=&seasonId=&gameweek=` — non-mutating planning import preview.
 - `POST /api/v1/squad/import` with `mode=draft|replace` and a snapshot ID — validated planning import.
 
-All endpoints use stable application field names, pagination metadata where applicable, and the common public-warehouse freshness object.
+All endpoints use stable application field names and the warehouse `common-response-contract`, including its `{data,meta}` success shape, `{error,meta}` error shape, pagination, coverage, and common freshness/provenance object. A compatibility adapter may expose legacy freshness fields during migration, but new consumers use only the common contract.
 
 ## Risks / Trade-offs
 
@@ -114,14 +126,12 @@ All endpoints use stable application field names, pagination metadata where appl
 
 The rollout gate requires sanitized fixtures for public entry endpoints, fake-session tests for private endpoints, a multi-page league fixture, and an end-to-end preview/confirm import that proves automatic sync cannot overwrite planning state.
 
-## Open Questions
+## Finalized implementation choices
 
-- Should an entry's current team be sourced from public picks only, or should `/my-team/{id}/` be required for exact bank/chips state?
-- Should importing an active team create a new planning draft by default, or update the existing plan only after explicit confirmation?
-- Should users provide a cookie manually for local use, or should the first release defer authenticated endpoints entirely?
-- What default retention is appropriate for league members and historical manager snapshots?
-- Should private or head-to-head league endpoints be added after classic standings?
-- Should comparison default to the logged/configured manager versus the whole league, or allow arbitrary subsets of league members?
-- Should future-gameweek comparison use the existing recommendation heuristic or remain limited to historical/live actuals in the first release?
-- Should manager snapshots be retained indefinitely for the configured entry, or use the same raw/canonical retention classes as public data?
-- What is the default maximum number of league members and historical gameweeks for automatic synchronization?
+- Use `/my-team/{entryId}/` when an authenticated session is configured for exact bank, team value, chips, and current picks; public picks remain a clearly labeled partial fallback.
+- Importing an active team defaults to a new planning draft. Replacing an existing plan always requires explicit confirmation and atomic validation.
+- Local authentication owns the user session. FPL session material is supplied through a redacted provider boundary and is never stored as the local account password; unauthenticated public/league scopes remain available.
+- Retain canonical manager snapshots using the same configured season/gameweek retention classes as public facts, with raw private payloads redacted and shorter-lived.
+- Classic league standings are first; private/head-to-head leagues are a later capability with no impact on current contracts.
+- The default comparison is the authenticated/configured manager against selected rivals, with a bounded whole-league sample available. Future-gameweek comparisons are limited to estimates with explicit labels; historical/live actuals are the default.
+- Automatic synchronization defaults to 50 league members and the selected gameweek plus the current season history; larger scopes require an explicit asynchronous request.

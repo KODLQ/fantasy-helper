@@ -71,7 +71,6 @@ Developers may push their own task branches, then delete them after merging.
 Use the branch naming convention from the workflow:
 
 * `task/<slug>`
-* `task/<id>-<slug>`
 
 GitHub does not provide a native negative branch-pattern rule for this
 namespace. Enforce it through review convention, and

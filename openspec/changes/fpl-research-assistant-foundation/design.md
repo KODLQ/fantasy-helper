@@ -1,6 +1,6 @@
 ## Context
 
-The repository is empty and needs a small monorepo that can be run locally as a database, backend API, and frontend application. The product is a single-user FPL research workspace rather than a multi-tenant social product. Its first useful outcome is trustworthy, fresh source data plus explainable decisions for a user's squad.
+The repository is empty and needs a small monorepo that can be run locally as a database, backend API, and frontend application. The product is a local FPL research workspace with authenticated local users rather than a multi-tenant social product. Its first useful outcome is trustworthy, fresh source data plus explainable decisions for a user's squad.
 
 The external source is the official Fantasy Premier League web API. Source payloads can change shape and can be temporarily unavailable, so ingestion must be isolated behind an adapter, validated before writes, and observable through sync records. The application must remain useful when the most recent sync is not available.
 
@@ -43,7 +43,7 @@ Alternative considered: one all-or-nothing transaction for every endpoint. That 
 
 ### 4. Typed API contracts with explicit freshness
 
-Expose JSON endpoints under `/api/v1`. Every data response includes a `dataFreshness` object containing the last successful sync time and any stale/partial warning. Use request/response structs and validation at the HTTP boundary; the frontend never depends on raw source field names.
+Expose JSON endpoints under `/api/v1`. Every response uses the shared warehouse `common-response-contract`: successful data uses `{data,meta}` with request scope/freshness/provenance, and failures use `{error,meta}` with a stable code and request ID. The frontend never depends on raw source field names. The existing `dataFreshness` field is migrated through a compatibility adapter and is not used by new endpoints.
 
 ### 5. Deterministic recommendation score
 
@@ -86,8 +86,8 @@ Maintain a button-coverage matrix in the browser suite. Every actionable button 
 5. For rollback, stop the backend/frontend and deploy the previous binary/UI; preserve normalized data and sync records. Only roll back a migration with its explicit down migration after confirming no newer data depends on it.
 6. Run `make deploy ENV=local` for hot-refresh development, `make deploy ENV=dev` for staging-like containers, or `make deploy ENV=prod` for the production image set. Use the matching `make down ENV=...` command to stop and remove the environment's containers.
 
-## Open Questions
+## Finalized boundaries
 
-- Should future releases support multiple seasons in the UI, or only retain prior seasons for comparison and backtesting?
-- Which scheduler is preferred for production deployment: an in-process interval, a container job, or an external scheduler?
-- When transfer recommendations are added, should the optimizer support free transfers, hits, chips, and wildcard/bench boost rules in the same planning model?
+- The warehouse retains multiple explicitly configured seasons for comparison/backtesting; the first UI may default to one active season and expose prior seasons through analysis selectors.
+- The first scheduler is in-process with durable work items; external jobs remain a compatible later trigger.
+- Transfer recommendations and the optimal-team change own free transfers, hits, chips, and wildcard/bench-boost rules. The foundation only supplies versioned rules and validated facts.

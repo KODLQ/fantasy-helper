@@ -44,8 +44,36 @@ The system SHALL accept authenticated session material only through an injected 
 - **WHEN** a private endpoint is enabled without a session provider
 - **THEN** the system reports the scope as unavailable without attempting a request or storing placeholder credentials
 
+### Requirement: Own and lifecycle remote FPL sessions per local user
+
+The system SHALL keep the local application session separate from remote FPL session material, associate each remote connection with exactly one local user and configured entry, never store an FPL password, and support validation, reauthentication, revocation, and deletion states.
+
+#### Scenario: User supplies a remote session
+- **WHEN** an authenticated local user supplies a cookie/token through an enabled secret provider for an entry
+- **THEN** the provider validates the session, stores only redacted connection status/provenance, and never returns or persists the raw secret in application data
+
+#### Scenario: Remote session expires
+- **WHEN** `/me/` or `/my-team/{entryId}/` returns 401/403
+- **THEN** the connection becomes `reauth_required` or `permission_denied`, private retries stop, prior manager facts remain available, and public sync status is unchanged
+
+#### Scenario: User disconnects a remote session
+- **WHEN** the owning user revokes or deletes a manager connection
+- **THEN** the provider removes the secret, private connection metadata and owned derived records follow the configured deletion policy, and shared public warehouse facts remain intact
+
+### Requirement: Preserve manager privacy and retention
+
+The system SHALL scope manager connections, manager facts, active-team snapshots, and private derived analysis by local owner, shall redact private source payloads, and shall expose export/deletion behavior without deleting shared public facts.
+
+#### Scenario: Another user requests a manager connection
+- **WHEN** a local user requests a connection, snapshot, or private manager fact owned by another user
+- **THEN** the API returns the configured non-disclosing not-found/forbidden response and reveals no connection status, entry ownership, or private data
+
+#### Scenario: Private retention cleanup runs
+- **WHEN** the configured private raw-payload window expires
+- **THEN** raw private bodies/secrets are removed or anonymized while retained canonical facts, redacted provenance, and shared public warehouse rows follow their own retention policies
+
 ### Requirement: Provide manager decision-analysis data
-The system SHALL expose stable read models joining manager picks and transfers to public player-gameweek facts, including points, captain multiplier, bench points, transfer cost, chips, and freshness.
+The system SHALL expose stable read models joining manager picks and transfers to public player-gameweek facts, using canonical `player-points-v1`, `team-points-v1`, `captain-delta-v1`, and `transfer-cost-v1` formulas for points, captain multiplier, bench points, transfer cost, chips, and freshness.
 
 #### Scenario: Manager reviews a completed gameweek
 - **WHEN** a client requests a completed gameweek for a configured entry

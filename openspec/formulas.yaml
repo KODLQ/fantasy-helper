@@ -1,0 +1,67 @@
+version: 1
+owner: fpl-analysis-workbench
+
+# This registry is the sole source of truth for derived analysis formulas.
+# Child changes reference formula IDs and versions; they must not redefine them.
+normalization:
+  id: normalized-feature-v1
+  definition: "normalize(x, peers) = 0.5 when max(peers)=min(peers); otherwise (x-min(peers))/(max(peers)-min(peers))"
+  missingInput: exclude-from-denominator-and-report
+  constantPeerSet: 0.5-for-all-present-values
+
+formulas:
+  player-points:
+    version: player-points-v1
+    definition: "effectivePlayerPoints = playerGameweekPoints * pickMultiplier"
+    consumers: [fpl-manager-league-sync, fpl-league-gameweek-insights, fpl-optimal-team-learning]
+  team-points:
+    version: team-points-v1
+    definition: "grossTeamPoints = sum(effectivePlayerPoints for the selected lineup); benchPoints = sum(playerGameweekPoints where pickMultiplier=0)"
+    consumers: [fpl-manager-league-sync, fpl-league-gameweek-insights, fpl-optimal-team-learning]
+  captain-delta:
+    version: captain-delta-v1
+    definition: "captainDelta = captainEffectivePoints - captainBasePoints"
+    consumers: [fpl-manager-league-sync, fpl-league-gameweek-insights, fpl-optimal-team-learning]
+  transfer-cost:
+    version: transfer-cost-v1
+    definition: "transferCost = paidTransfers * ruleset.hitCost; netTeamPoints = grossTeamPoints - transferCost"
+    consumers: [fpl-manager-league-sync, fpl-transfer-fixture-research, fpl-optimal-team-learning]
+  team-points-difference:
+    version: team-points-difference-v1
+    definition: "pointsDifference(A,B) = netTeamPoints(A) - netTeamPoints(B) for identical season, gameweek, snapshot state, and ruleset"
+    consumers: [fpl-manager-league-sync, fpl-league-gameweek-insights]
+  team-overlap:
+    version: team-overlap-v1
+    definition: "teamOverlap(A,B) = |rosterA ∩ rosterB| / |rosterA ∪ rosterB|; roster is 15 players unless the request explicitly selects startingXI"
+    consumers: [fpl-manager-league-sync, fpl-league-gameweek-insights]
+  differential-contribution:
+    version: differential-contribution-v1
+    definition: "differentialContribution(A,B) = sum(effective points of A-only players) - sum(effective points of B-only players)"
+    consumers: [fpl-manager-league-sync, fpl-league-gameweek-insights]
+  fixture-ease:
+    version: fixture-research-v1
+    definition: "fixtureEase=(6-difficulty)/5; fixtureWeight=homeAwayWeight*availabilityFactor; teamFixtureEase=sum(fixtureEase*fixtureWeight)/sum(fixtureWeight)"
+    defaults: "homeAwayWeight=1.0 home, 0.95 away; availabilityFactor=1.0 available, 0.5 doubtful/unknown, 0 unavailable"
+    consumers: [fpl-transfer-fixture-research, fpl-live-alerts-storyline]
+  differential-opportunity:
+    version: differential-opportunity-v1
+    definition: "opportunity=0.40*normalized(pointsPer90)+0.25*normalized(minutesShare)+0.20*teamFixtureEase+0.10*(1-ownershipShare)+0.05*availabilityFactor"
+    minimumMinutes: 180
+    consumers: [fpl-transfer-fixture-research]
+  recommendation-evaluation:
+    version: recommendation-evaluation-v1
+    definition: "recommendedPoints=sum(actualPoints*lineupMultiplier); oraclePoints=bestLegalXICaptainScore; regret=oraclePoints-recommendedPoints; coverage=validEvaluatedGameweeks/requestedGameweeks"
+    topK: "count(recommendedPlayerIds ∩ outcomeTopKPlayerIds) / min(K,evaluatedRecommendedPlayers)"
+    rankCorrelation: "Spearman rank correlation over players with both ranks; unavailable when comparablePlayers<3"
+    calibration: "not_applicable unless the algorithm emits probabilities"
+    consumers: [fpl-recommendation-evaluation]
+  analysis-alerts:
+    version: analysis-alerts-v1
+    thresholds: "price abs(delta)>=max(0.1,0.02*before); availability after in doubtful/unavailable; fixture abs(teamFixtureEase delta)>=0.20 or blank/double changes; recommendation enters/leaves topN or abs(score delta)>=0.10"
+    identity: "sha256(userId|alertType|entityId|normalizedBefore|normalizedAfter|ruleVersion)"
+    consumers: [fpl-live-alerts-storyline]
+  season-storyline:
+    version: season-storyline-v1
+    definition: "eventImpact=weightedMean(0.50*normalized(abs(netPointsDelta)),0.30*normalized(abs(rankDelta)),0.20*normalized(abs(decisionOpportunityDelta)))"
+    inclusion: "eventImpact>=0.65 or configured absolute net-point threshold; missing components remove their weights and renormalize"
+    consumers: [fpl-live-alerts-storyline]

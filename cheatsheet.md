@@ -7,20 +7,19 @@ One-page reference. Full rules live in `README.md`.
 | Branch | Use |
 |---|---|
 | `main` | integration; PR-only |
-| `task/<slug>` | normal work, no ClickUp task |
-| `task/<id>-<slug>` | normal work with ClickUp task |
+| `task/<slug>` | all normal short-lived work |
 | `release/<major>.<minor>` | release stabilization, RCs, patch releases |
 
 No other shared branch names exist.
 
-Example: `task/865d6p9z8-improve-linux-server-detection`
+Example: `task/improve-linux-server-detection`
 
 ## Daily flow
 
 ```sh
 git switch main
 git pull --ff-only
-git switch -c task/865d6p9z8-improve-linux-server-detection
+git switch -c task/improve-linux-server-detection
 # work, commit, push
 # open PR to main
 # squash-merge after review + green CI
@@ -37,10 +36,10 @@ description starts with a present-tense verb ("add", "fix", "reject",
 
 Example commit: `fix: reject empty macos mount snapshots`
 
-PR title with a ClickUp task ID:
+PR title with a GitHub Issue:
 
 ```
-<type>: <description> [<id>]
+<type>: <description> (#<issue-number>)
 ```
 
 Allowed `<type>`: `feat`, `fix`, `docs`, `refactor`, `test`, `chore`, `ci`,

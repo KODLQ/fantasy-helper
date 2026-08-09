@@ -111,17 +111,13 @@ behavior on `task/*` is convention, not enforcement.
 ### Branches
 These are the only shared branch names used by the workflow.
 
-`<id>` is the ClickUp task ID (for example `865d6p9z8`).
 `<slug>` is a short lowercase hyphenated summary of the work.
 
 * `main`
   * the integration branch
   * always merged into by PR
 * `task/<slug>`
-  * normal short-lived work with no ClickUp task
-  * PR target is `main`
-* `task/<id>-<slug>`
-  * normal short-lived work with a ClickUp task
+  * all normal short-lived work, whether or not it has a GitHub Issue
   * PR target is `main`
 * `release/<major>.<minor>`
   * release stabilization and maintenance line
@@ -131,8 +127,8 @@ Examples:
 
 ```sh
 task/restore-macos-keychain-entitlements
-task/865d6p9z8-improve-linux-server-detection
-task/869c9re7u-oracle-link-pdbs-to-instances
+task/improve-linux-server-detection
+task/improve-player-comparison
 release/2.3
 ```
 
@@ -164,7 +160,7 @@ Examples:
    ```sh
    git switch main
    git pull --ff-only
-   git switch -c task/865d6p9z8-improve-linux-server-detection
+   git switch -c task/improve-linux-server-detection
    ```
 2. Commit and push to the task branch.
 3. Open a PR to `main`.
@@ -177,7 +173,9 @@ Merge style by PR type:
 * `release/* -> main` reconciliation PRs use a **regular merge commit** (see
   Release flow step 6 for why)
 
-When the work does not have a ClickUp task, use `task/<slug>` instead:
+Use `task/<slug>` for every normal task branch. When the work has a GitHub
+Issue, link it from the PR title or body; the Issue number does not belong in
+the branch name:
 
 ```sh
 git switch main
@@ -197,31 +195,31 @@ Commits and PR titles use the same Conventional Commit format:
 <type>: <description>
 ```
 
-PR titles append the ClickUp task ID at the end when the work has one. The
+PR titles append the GitHub Issue number at the end when the work has one. The
 suffix is required on PR titles (because the PR title becomes the squash
 commit on `main`) and is not used on individual commits.
 
 ```text
-<type>: <description> [<id>]
+<type>: <description> (#<issue-number>)
 ```
 
 Example — one task branch's life from first commit to PR title:
 
 ```text
-# Branch: task/865d6p9z8-improve-linux-server-detection
-# Commits as you work — no ClickUp ID on individual commits:
+# Branch: task/improve-linux-server-detection
+# Commits as you work — no GitHub Issue number on individual commits:
 feat: improve linux server detection
 refactor: lint fixes
 fix: narrow linux workstation chassis hints
 fix: satisfy linux chassis clippy lint
 refactor: spell out linux chassis hint values
 
-# PR title — ClickUp ID appended; this becomes the squash commit on main:
-feat: improve linux server detection [865d6p9z8]
+# PR title — GitHub Issue number appended; this becomes the squash commit on main:
+feat: improve linux server detection (#123)
 ```
 
-When the work has no ClickUp task, the branch is `task/<slug>` and the PR
-title omits the suffix:
+When the work has no GitHub Issue, the branch is still `task/<slug>` and the
+PR title omits the Issue suffix:
 
 ```text
 # Branch: task/software-walk-network-drive-traversal

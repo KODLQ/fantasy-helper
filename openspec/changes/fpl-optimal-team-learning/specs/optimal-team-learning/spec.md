@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Calculate a sequential best-achievable path
-The system SHALL calculate a valid sequence of squads and lineups from the season start or a selected starting squad through every completed gameweek up to an endpoint gameweek, rather than selecting disconnected weekly teams.
+The system SHALL calculate a valid sequence of squads and lineups from the season start or a selected starting squad through every completed gameweek up to an endpoint gameweek, using the canonical player-points, team-points, captain, and transfer-cost formulas rather than selecting disconnected weekly teams.
 
 #### Scenario: Endpoint gameweek is recalculated
 - **WHEN** a user selects a season and completed endpoint gameweek
@@ -25,6 +25,30 @@ The system SHALL enforce the selected season's budget, squad size, positional co
 - **THEN** the run reports the missing assumptions and marks the affected result as incomplete or assumption-based
 
 The path SHALL use the ruleset's sell-price function and price-at-deadline values when checking bank affordability; current prices SHALL NOT be substituted for historical prices.
+
+### Requirement: Apply canonical chip, substitution, missing-data, and normalization rules
+
+The system SHALL use the season-specific `fpl-rules-v1` behavior from `openspec/fpl-rules.yaml` for chips, captain/vice-captain, automatic substitutions, missing inputs, and shared normalization, and SHALL record the ruleset checksum in every run.
+
+#### Scenario: Chip behavior is modeled
+- **WHEN** a run includes wildcard, free hit, bench boost, triple captain, or another season-defined chip
+- **THEN** the optimizer applies the configured availability, exclusivity, scoring, transfer, squad-restoration, and permanence behavior for that season
+
+#### Scenario: Chip behavior is unavailable
+- **WHEN** the source does not provide the required chip rule or historical availability
+- **THEN** the affected run is incomplete or assumption-based and cannot be labeled `complete_exact`
+
+#### Scenario: Automatic substitution is required
+- **WHEN** a starting player has zero minutes after a gameweek and the source provides valid bench order and minutes
+- **THEN** the first eligible bench player that preserves a legal formation replaces the starter, and vice-captain multiplier behavior is applied when the captain did not play
+
+#### Scenario: Required fact is missing
+- **WHEN** a required player point, price, availability, fixture, rules, or chip input is missing
+- **THEN** the affected gameweek is marked incomplete and no zero or current-value substitute is used
+
+#### Scenario: Normalization has no spread
+- **WHEN** a peer set has equal values for a normalized feature
+- **THEN** every present value receives 0.5, missing values are excluded from the denominator, and the normalization version is returned
 
 ### Requirement: Account for free transfers and paid transfer costs
 The system SHALL calculate free transfers available, carried free transfers, transfers used, paid transfers, hit cost, gross points, and net points for every weekly transition using the versioned season ruleset.
@@ -53,7 +77,7 @@ The system SHALL recalculate the optimal path for each requested endpoint gamewe
 The reproducibility key SHALL include season, start/end gameweek, starting mode, entry ID when applicable, input snapshot IDs, ruleset version, algorithm version, chip policy, candidate policy, objective, and tie-breaker policy.
 
 ### Requirement: Report optimality and data quality
-The system SHALL label each result as exact, bounded, incomplete, or assumption-based and SHALL report missing weeks, omitted candidates, candidate limits, and excluded rule features such as chips.
+The system SHALL label each result as complete_exact, best_found_bounded, incomplete, assumption_based, or feasibility_unproven and SHALL report missing weeks, omitted candidates, candidate limits, excluded rule features such as chips, and feasibility certification where applicable.
 
 #### Scenario: Production bounded search completes
 - **WHEN** a bounded search returns a best path
@@ -63,7 +87,23 @@ The system SHALL label each result as exact, bounded, incomplete, or assumption-
 - **WHEN** player points, prices, availability, or rules are missing for an affected week
 - **THEN** the result identifies the affected week and prevents an unlabeled zero-filled result
 
-The allowed optimality states SHALL be `exact`, `bounded_best_found`, `incomplete`, and `assumption_based`; the API SHALL return candidate omissions, search parameters, and excluded chip/ruleset features.
+The allowed optimality states SHALL be `complete_exact`, `best_found_bounded`, `incomplete`, `assumption_based`, and `feasibility_unproven`; the API SHALL return candidate omissions, search parameters, excluded chip/ruleset features, and the certification record for `complete_exact`.
+
+### Requirement: Certify exact solver feasibility
+
+The system SHALL refuse to label a full-player result `complete_exact` until a reproducible benchmark proves the declared runtime, memory, temporary-storage, persisted-result, concurrency, and cancellation budgets for the same algorithm, ruleset, schema, and supported player cardinality.
+
+#### Scenario: Feasibility benchmark passes
+- **WHEN** exhaustive full-player search completes within all declared budgets and its checksum is reproducible
+- **THEN** the run may be labeled `complete_exact` and exposes the benchmark ID, hardware profile, input cardinalities, zero-pruning evidence, and resource measurements
+
+#### Scenario: Feasibility benchmark fails
+- **WHEN** runtime, memory, scratch storage, result size, determinism, or cancellation exceeds its budget
+- **THEN** the run is labeled `feasibility_unproven` or `best_found_bounded` and the UI cannot use complete-optimal wording
+
+#### Scenario: Exact run is cancelled
+- **WHEN** a full-player exact run is cancelled or exceeds its budget
+- **THEN** search stops within the cancellation target, no partial result is presented as complete, and only progress/diagnostic metadata is retained
 
 ### Requirement: Explain and compare the optimal path
 The system SHALL expose each weekly optimal squad, lineup, captain, bench, transfers, transfer cost, gross points, net points, and comparison against the user's actual synchronized team when available.

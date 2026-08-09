@@ -14,6 +14,9 @@ Users need more than the best team for the current gameweek: they need to unders
 - Add configurable approximations and bounded optimization so historical analysis remains usable as the search space grows.
 - Add an explicit optimization-run contract with starting mode, endpoint gameweek, ruleset version, chip policy, candidate policy, objective, optimality status, and input snapshot identity.
 - Show gross points, transfer hits, net points, remaining bank, team value, weekly transfers, and the exact reason each path transition was selected.
+- Define the product as the complete hindsight-optimal legal path when an exact full-player run has all official source rules and facts; bounded or assumption-based runs must use visibly weaker labels.
+- Score and explain the result at each gameweek boundary: the weekly row is the only scoring interval, and every transfer, lineup, captain, and chip change is attributed to the boundary before that gameweek.
+- Treat net points as the only optimization objective. Team value and remaining bank are reported every week and used only as deterministic tie-breakers after points, never as a substitute for points.
 
 ## Capabilities
 
@@ -33,3 +36,5 @@ Users need more than the best team for the current gameweek: they need to unders
 - Requires deterministic tie-breaking, versioned algorithm output, and tests for small exhaustive seasons before using bounded optimization for real seasons.
 - This is a learning and retrospective tool; it is not a guarantee of future points and does not execute transfers.
 - A bounded result is labeled as “best found under configured search limits,” never silently presented as mathematically optimal.
+- “This is the complete optimal team that was possible” is reserved for a `complete_exact` run; the UI explains the fantasy rules, hindsight nature, weekly scoring, transfers, hits, and team-value reporting beside the result.
+- Do not promise `complete_exact` until a benchmark proves exhaustive full-player search meets the documented local runtime, memory, scratch-space, and persisted-result budgets.

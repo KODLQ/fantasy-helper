@@ -1,2 +1,6 @@
 schema: spec-driven
 created: 2026-08-08
+dependsOn:
+  - fpl-public-data-warehouse
+  - local-user-authentication
+  - fpl-manager-league-sync

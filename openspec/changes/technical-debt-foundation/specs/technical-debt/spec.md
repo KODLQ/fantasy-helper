@@ -1,45 +1,49 @@
 ## ADDED Requirements
 
-### Requirement: Use one authoritative migration history
+### Requirement: Use a safe typed frontend request boundary
 
-The system SHALL apply ordered files from `db/migrations` and SHALL NOT maintain a second copy of schema DDL in application code.
+The frontend SHALL map common success/error responses, non-JSON failures, timeouts, cancellations, and stale responses into typed state without exposing raw secrets or overwriting newer data.
 
-#### Scenario: Backend starts against a migrated database
-- **WHEN** the backend starts
-- **THEN** it verifies database connectivity and uses the already-applied schema without rewriting migration history
+#### Scenario: Older request completes late
+- **WHEN** a newer request has already started and the older request completes afterward
+- **THEN** the older result is ignored and the UI retains the newer request state
 
-#### Scenario: Deployment applies a new migration
-- **WHEN** deployment finds unapplied migration files
-- **THEN** it applies them in order and fails before serving traffic if any migration fails
+#### Scenario: Backend returns non-JSON
+- **WHEN** an API request returns a non-JSON body, timeout, or cancellation
+- **THEN** the client exposes a typed recoverable error with request context and does not treat the response as domain data
 
-### Requirement: Persist one sync run lifecycle
+### Requirement: Protect verification targets and generated artifacts
 
-The system SHALL associate running, stage, partial, success, and failed updates with one `sync_runs` record and SHALL persist the actual source checksum.
+Integration tests SHALL reject unsafe or unrecognized database targets, and generated browser artifacts SHALL be isolated from source-controlled application output.
 
-#### Scenario: A sync completes partially
-- **WHEN** the snapshot succeeds and one history batch fails
-- **THEN** one run is marked partial, its failed stage is recorded, and its checksum matches the source response checksum
+#### Scenario: Unsafe database target
+- **WHEN** an integration test is configured with a production-like or unrecognized database name
+- **THEN** the test aborts before destructive setup
 
-#### Scenario: The service shuts down during sync
-- **WHEN** the process receives a termination signal
-- **THEN** the sync context is cancelled and the server waits for the coordinator before exiting
+#### Scenario: Browser suite generates reports
+- **WHEN** Playwright produces traces, screenshots, videos, or reports
+- **THEN** artifacts use the configured test-output location and do not alter application source or fixtures
 
-### Requirement: Retain last-known-good history
+### Requirement: Verify cross-cutting frontend operations
 
-The system SHALL merge successful history results into the current snapshot and SHALL retain existing history for failed players.
+The system SHALL run formatting, linting, type checks, API contract checks, health checks, and browser smoke tests through documented commands.
 
-#### Scenario: A player history endpoint fails
-- **WHEN** a history request fails after retries
-- **THEN** the player keeps its previous history in API responses and the sync status identifies the failure
+#### Scenario: Standard verification runs
+- **WHEN** the standard verification command is run
+- **THEN** all configured checks execute with actionable failures and no warehouse migration behavior is duplicated
 
-### Requirement: Identify seasons explicitly
+### Requirement: Validate OpenSpec dependencies and ownership in CI
 
-The system SHALL not hard-code the active season identity. The source configuration SHALL provide or derive an explicit source season ID and display name.
+CI SHALL validate the canonical dependency/ownership registry, detect unknown changes, cycles, invalid release order, duplicate capability owners, parent/child specification duplication, formula/rules registry drift, and strict OpenSpec validation before accepting implementation changes.
 
-### Requirement: Scale snapshot persistence
+#### Scenario: Dependency cycle is introduced
+- **WHEN** a registry edit creates a dependency cycle or references an unknown change
+- **THEN** CI fails with the cycle/reference path and does not accept the change
 
-The repository SHALL batch or bulk-write repeated snapshot entities and SHALL avoid one database round trip per player-history row.
+#### Scenario: Capability gets two owners
+- **WHEN** two changes claim the same authoritative capability
+- **THEN** CI fails with both change names and the capability name
 
-### Requirement: Harden client and deployment boundaries
-
-The frontend SHALL handle non-JSON failures, cancellation, timeouts, and stale responses. Deployment SHALL run migrations and health checks deterministically, and integration tests SHALL reject unsafe database targets.
+#### Scenario: Child spec is duplicated in the roadmap
+- **WHEN** a roadmap change adds a domain requirement already owned by a child change
+- **THEN** CI fails with the parent/child ownership conflict
