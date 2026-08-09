@@ -111,17 +111,13 @@ behavior on `task/*` is convention, not enforcement.
 ### Branches
 These are the only shared branch names used by the workflow.
 
-`<issue-number>` is the GitHub Issue number (for example `123`).
 `<slug>` is a short lowercase hyphenated summary of the work.
 
 * `main`
   * the integration branch
   * always merged into by PR
 * `task/<slug>`
-  * normal short-lived work without a GitHub Issue
-  * PR target is `main`
-* `task/<issue-number>-<slug>`
-  * normal short-lived work tracked by a GitHub Issue
+  * all normal short-lived work, whether or not it has a GitHub Issue
   * PR target is `main`
 * `release/<major>.<minor>`
   * release stabilization and maintenance line
@@ -131,8 +127,8 @@ Examples:
 
 ```sh
 task/restore-macos-keychain-entitlements
-task/123-improve-linux-server-detection
-task/456-improve-player-comparison
+task/improve-linux-server-detection
+task/improve-player-comparison
 release/2.3
 ```
 
@@ -164,7 +160,7 @@ Examples:
    ```sh
    git switch main
    git pull --ff-only
-   git switch -c task/123-improve-linux-server-detection
+   git switch -c task/improve-linux-server-detection
    ```
 2. Commit and push to the task branch.
 3. Open a PR to `main`.
@@ -177,7 +173,9 @@ Merge style by PR type:
 * `release/* -> main` reconciliation PRs use a **regular merge commit** (see
   Release flow step 6 for why)
 
-When the work does not have a GitHub Issue, use `task/<slug>` instead:
+Use `task/<slug>` for every normal task branch. When the work has a GitHub
+Issue, link it from the PR title or body; the Issue number does not belong in
+the branch name:
 
 ```sh
 git switch main
@@ -208,7 +206,7 @@ commit on `main`) and is not used on individual commits.
 Example — one task branch's life from first commit to PR title:
 
 ```text
-# Branch: task/123-improve-linux-server-detection
+# Branch: task/improve-linux-server-detection
 # Commits as you work — no GitHub Issue number on individual commits:
 feat: improve linux server detection
 refactor: lint fixes
@@ -220,8 +218,8 @@ refactor: spell out linux chassis hint values
 feat: improve linux server detection (#123)
 ```
 
-When the work has no GitHub Issue, the branch is `task/<slug>` and the PR
-title omits the suffix:
+When the work has no GitHub Issue, the branch is still `task/<slug>` and the
+PR title omits the Issue suffix:
 
 ```text
 # Branch: task/software-walk-network-drive-traversal

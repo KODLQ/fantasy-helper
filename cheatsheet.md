@@ -7,20 +7,19 @@ One-page reference. Full rules live in `README.md`.
 | Branch | Use |
 |---|---|
 | `main` | integration; PR-only |
-| `task/<slug>` | normal work without a GitHub Issue |
-| `task/<issue-number>-<slug>` | normal work tracked by a GitHub Issue |
+| `task/<slug>` | all normal short-lived work |
 | `release/<major>.<minor>` | release stabilization, RCs, patch releases |
 
 No other shared branch names exist.
 
-Example: `task/123-improve-linux-server-detection`
+Example: `task/improve-linux-server-detection`
 
 ## Daily flow
 
 ```sh
 git switch main
 git pull --ff-only
-git switch -c task/123-improve-linux-server-detection
+git switch -c task/improve-linux-server-detection
 # work, commit, push
 # open PR to main
 # squash-merge after review + green CI
