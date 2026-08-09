@@ -31,3 +31,20 @@ func TestSourceNormalizesSnapshot(t *testing.T) {
 		t.Fatalf("player was not normalized: %#v", players[0])
 	}
 }
+
+func TestSourceReportsRawObservations(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"events":[],"teams":[],"elements":[]}`))
+	}))
+	defer server.Close()
+	observations := []SourceObservation{}
+	source := NewFPLSource(server.URL)
+	source.OnObservation = func(observation SourceObservation) { observations = append(observations, observation) }
+	if _, _, err := source.Bootstrap(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(observations) != 1 || observations[0].Endpoint != "/bootstrap-static/" || observations[0].ValidationState != "valid" || len(observations[0].Payload) == 0 || observations[0].Checksum == "" {
+		t.Fatalf("unexpected source observation: %#v", observations)
+	}
+}

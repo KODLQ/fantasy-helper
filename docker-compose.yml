@@ -33,11 +33,24 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O - http://localhost:8080/healthz >/dev/null"]
       interval: 5s
       timeout: 3s
       retries: 15
+
+  migrate:
+    image: postgres:16-alpine
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-fantasy}:${POSTGRES_PASSWORD:-fantasy}@db:5432/${POSTGRES_DB:-fantasy_helper}
+    volumes:
+      - ./db:/migrations:ro
+    command: ["sh", "/migrations/migrate.sh"]
+    depends_on:
+      db:
+        condition: service_healthy
 
   frontend:
     build:

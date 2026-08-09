@@ -25,12 +25,21 @@ func NewAPI(store *Store, source *FPLSource, dbHealthy func(context.Context) boo
 	if len(repositories) > 0 {
 		repository = repositories[0]
 	}
-	return &API{Store: store, Source: source, DBHealthy: dbHealthy, Logger: logger, Repository: repository}
+	api := &API{Store: store, Source: source, DBHealthy: dbHealthy, Logger: logger, Repository: repository}
+	if recorder, ok := repository.(SourcePayloadRepository); ok && source != nil {
+		source.OnObservation = func(observation SourceObservation) {
+			if err := recorder.RecordSourceObservation(context.Background(), observation); err != nil && logger != nil {
+				logger.Warn("record public source observation failed", "endpoint", observation.Endpoint, "error", err)
+			}
+		}
+	}
+	return api
 }
 func (a *API) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", a.health)
 	mux.HandleFunc("/api/v1/sync/status", a.syncStatus)
+	mux.HandleFunc("/api/v1/data/snapshots", a.dataSnapshots)
 	mux.HandleFunc("/api/v1/sync", a.sync)
 	mux.HandleFunc("/api/v1/players", a.players)
 	mux.HandleFunc("/api/v1/players/", a.players)
@@ -69,6 +78,9 @@ func writeJSON(w http.ResponseWriter, status int, value interface{}) {
 func writeError(w http.ResponseWriter, status int, code, message string, details []ValidationError) {
 	writeJSON(w, status, map[string]interface{}{"error": map[string]interface{}{"code": code, "message": message, "details": details}})
 }
+func writeEnvelope(w http.ResponseWriter, status int, requestID string, scope Scope, freshness Freshness, data interface{}) {
+	writeJSON(w, status, map[string]interface{}{"data": data, "meta": ResponseMeta{RequestID: requestID, Scope: scope, Freshness: freshness}})
+}
 func parseInt(value string, fallback int) int {
 	n, err := strconv.Atoi(value)
 	if err != nil {
@@ -88,6 +100,44 @@ func (a *API) health(w http.ResponseWriter, r *http.Request) {
 func (a *API) syncStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, a.Store.SyncStatus())
 }
+func (a *API) dataSnapshots(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]interface{}{"error": map[string]interface{}{"code": "method_not_allowed", "message": "Use GET for dataset snapshots."}, "meta": ResponseMeta{RequestID: w.Header().Get("X-Request-ID")}})
+		return
+	}
+	query := r.URL.Query()
+	scope := Scope{SeasonID: parseInt(query.Get("seasonId"), 0), Gameweek: parseInt(query.Get("gameweek"), 0), Dataset: query.Get("dataset")}
+	if snapshotRepository, ok := a.Repository.(DatasetSnapshotRepository); ok {
+		if snapshots, err := snapshotRepository.ListDatasetSnapshots(r.Context(), scope); err == nil {
+			writeEnvelope(w, http.StatusOK, w.Header().Get("X-Request-ID"), scope, a.Store.Freshness(), snapshots)
+			return
+		}
+	}
+	status := a.Store.SyncStatus()
+	state := status.Freshness.Status
+	if state == "fresh" {
+		state = "actual"
+	} else if state == "unavailable" || state == "" {
+		state = "unavailable"
+	} else {
+		state = "partial"
+	}
+	updated := status.Freshness.SnapshotAt
+	if updated.IsZero() {
+		updated = status.FinishedAt
+	}
+	item := DatasetSnapshot{ID: status.Checksum, Dataset: "public-fpl", State: state, SeasonID: 1, NormalizedAt: updated, NormalizerVersion: "demo-v1", MissingInputs: append([]string{}, status.FailedStages...)}
+	if item.ID == "" {
+		item.ID = "unavailable"
+	}
+	if scope.SeasonID == 0 {
+		scope.SeasonID = 1
+	}
+	if scope.Dataset == "" {
+		scope.Dataset = "public-fpl"
+	}
+	writeEnvelope(w, http.StatusOK, w.Header().Get("X-Request-ID"), scope, status.Freshness, []DatasetSnapshot{item})
+}
 func (a *API) sync(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Use POST to start a sync.", nil)
@@ -98,19 +148,37 @@ func (a *API) sync(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "sync_in_progress", "A sync is already running.", nil)
 		return
 	}
+	var request struct {
+		Scope    string `json:"scope"`
+		SeasonID int    `json:"seasonId"`
+		Gameweek int    `json:"gameweek"`
+	}
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&request)
+	}
+	if request.Scope == "" {
+		request.Scope = "full"
+	}
+	validScopes := map[string]bool{"catalog": true, "fixtures": true, "live": true, "player-history": true, "full": true}
+	if !validScopes[request.Scope] {
+		writeError(w, http.StatusBadRequest, "invalid_sync_scope", "Scope must be catalog, fixtures, live, player-history, or full.", nil)
+		return
+	}
 	started := time.Now().UTC()
-	running := SyncStatus{Status: "running", CurrentStage: "snapshot", StartedAt: started, CompletedStages: []string{}, FailedStages: []string{}, Freshness: a.Store.Freshness()}
+	scope := Scope{SeasonID: request.SeasonID, Gameweek: request.Gameweek, Dataset: request.Scope}
+	running := SyncStatus{Status: "running", Scope: scope, CurrentStage: "snapshot", StartedAt: started, CompletedStages: []string{}, FailedStages: []string{}, Freshness: a.Store.Freshness()}
 	a.Store.SetSyncStatus(running)
 	if a.Repository != nil {
 		_ = a.Repository.RecordSyncStatus(r.Context(), running)
 	}
-	go a.runSync()
+	go a.runSync(scope)
 	writeJSON(w, http.StatusAccepted, a.Store.SyncStatus())
 }
-func (a *API) runSync() {
+func (a *API) runSync(scope Scope) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	status := a.Store.SyncStatus()
+	status.Scope = scope
 	season, weeks, teams, players, fixtures, checksum, err := a.Source.Snapshot(ctx)
 	if err != nil {
 		status.Status = "failed"

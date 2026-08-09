@@ -88,6 +88,7 @@ type Freshness struct {
 
 type SyncStatus struct {
 	Status          string    `json:"status"`
+	Scope           Scope     `json:"scope,omitempty"`
 	CurrentStage    string    `json:"currentStage,omitempty"`
 	CompletedStages []string  `json:"completedStages"`
 	FailedStages    []string  `json:"failedStages"`
@@ -96,6 +97,30 @@ type SyncStatus struct {
 	FinishedAt      time.Time `json:"finishedAt,omitempty"`
 	Checksum        string    `json:"checksum,omitempty"`
 	Freshness       Freshness `json:"freshness"`
+}
+
+type ResponseMeta struct {
+	RequestID string    `json:"requestId"`
+	Scope     Scope     `json:"scope,omitempty"`
+	Freshness Freshness `json:"freshness"`
+}
+
+type Scope struct {
+	SeasonID int    `json:"seasonId,omitempty"`
+	Gameweek int    `json:"gameweek,omitempty"`
+	Dataset  string `json:"dataset,omitempty"`
+}
+
+type DatasetSnapshot struct {
+	ID                string    `json:"id"`
+	Dataset           string    `json:"dataset"`
+	State             string    `json:"state"`
+	SeasonID          int       `json:"seasonId"`
+	Gameweek          int       `json:"gameweek,omitempty"`
+	SourceFetchedAt   time.Time `json:"sourceFetchedAt,omitempty"`
+	NormalizedAt      time.Time `json:"normalizedAt"`
+	NormalizerVersion string    `json:"normalizerVersion"`
+	MissingInputs     []string  `json:"missingInputs"`
 }
 
 type Squad struct {

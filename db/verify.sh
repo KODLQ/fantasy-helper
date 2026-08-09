@@ -8,10 +8,10 @@ MIGRATIONS_DIR="${MIGRATIONS_DIR:-${SCRIPT_DIR}/migrations}"
 MIGRATIONS_DIR="${MIGRATIONS_DIR}" sh "${SCRIPT_DIR}/migrate.sh"
 MIGRATIONS_DIR="${MIGRATIONS_DIR}" sh "${SCRIPT_DIR}/migrate.sh"
 
-expected=4
+expected=$(find "${MIGRATIONS_DIR}" -maxdepth 1 -type f -name '*.up.sql' | wc -l | tr -d ' ')
 applied=$(psql "${DATABASE_URL}" -Atc "SELECT COUNT(*) FROM schema_migrations")
-if [ "${applied}" -lt "${expected}" ]; then
-	 echo "Expected at least ${expected} migrations, found ${applied}" >&2
+if [ "${applied}" -ne "${expected}" ]; then
+	 echo "Expected ${expected} migrations derived from ${MIGRATIONS_DIR}, found ${applied}" >&2
 	 exit 1
 fi
 

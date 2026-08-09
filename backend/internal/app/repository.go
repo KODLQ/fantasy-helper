@@ -26,6 +26,14 @@ type TransactionalRepository interface {
 	WithTransaction(context.Context, func(*sql.Tx) error) error
 }
 
+type DatasetSnapshotRepository interface {
+	ListDatasetSnapshots(context.Context, Scope) ([]DatasetSnapshot, error)
+}
+
+type SourcePayloadRepository interface {
+	RecordSourceObservation(context.Context, SourceObservation) error
+}
+
 type PostgresRepository struct {
 	db     *sql.DB
 	logger *slog.Logger
@@ -33,6 +41,15 @@ type PostgresRepository struct {
 
 func NewPostgresRepository(database *sql.DB, logger *slog.Logger) *PostgresRepository {
 	return &PostgresRepository{db: database, logger: logger}
+}
+
+func (r *PostgresRepository) RecordSourceObservation(ctx context.Context, observation SourceObservation) error {
+	var payload interface{}
+	if len(observation.Payload) > 0 {
+		payload = string(observation.Payload)
+	}
+	_, err := r.db.ExecContext(ctx, `INSERT INTO source_payloads (endpoint, fetched_at, http_status, checksum, validation_state, schema_version, payload, diagnostic) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, observation.Endpoint, observation.FetchedAt, observation.HTTPStatus, observation.Checksum, observation.ValidationState, observation.SchemaVersion, payload, nullableString(observation.Diagnostic))
+	return err
 }
 
 func (r *PostgresRepository) WithTransaction(ctx context.Context, fn func(*sql.Tx) error) error {
@@ -51,40 +68,21 @@ func (r *PostgresRepository) WithTransaction(ctx context.Context, fn func(*sql.T
 }
 
 func (r *PostgresRepository) EnsureSchema(ctx context.Context) error {
-	for _, statement := range schemaStatements {
-		if _, err := r.db.ExecContext(ctx, statement); err != nil {
-			return fmt.Errorf("ensure postgres schema: %w", err)
-		}
+	var applied int
+	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations`).Scan(&applied); err != nil {
+		return fmt.Errorf("check migration state: %w", err)
 	}
-	return nil
-}
-
-var schemaStatements = []string{
-	`CREATE TABLE IF NOT EXISTS schema_migrations (version TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`,
-	`CREATE TABLE IF NOT EXISTS seasons (id BIGSERIAL PRIMARY KEY, source_id INTEGER NOT NULL UNIQUE, name TEXT NOT NULL, start_date DATE, end_date DATE, is_current BOOLEAN NOT NULL DEFAULT FALSE, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`,
-	`CREATE TABLE IF NOT EXISTS gameweeks (id BIGSERIAL PRIMARY KEY, season_id BIGINT NOT NULL REFERENCES seasons(id) ON DELETE CASCADE, source_id INTEGER NOT NULL, name TEXT NOT NULL, deadline_time TIMESTAMPTZ, finished BOOLEAN NOT NULL DEFAULT FALSE, is_current BOOLEAN NOT NULL DEFAULT FALSE, average_score NUMERIC(6,2), created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE (season_id, source_id))`,
-	`CREATE TABLE IF NOT EXISTS teams (id BIGSERIAL PRIMARY KEY, season_id BIGINT NOT NULL REFERENCES seasons(id) ON DELETE CASCADE, source_id INTEGER NOT NULL, name TEXT NOT NULL, short_name TEXT NOT NULL, strength INTEGER, strength_overall_home INTEGER, strength_overall_away INTEGER, strength_attack_home INTEGER, strength_attack_away INTEGER, strength_defence_home INTEGER, strength_defence_away INTEGER, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE (season_id, source_id))`,
-	`CREATE TABLE IF NOT EXISTS players (id BIGSERIAL PRIMARY KEY, season_id BIGINT NOT NULL REFERENCES seasons(id) ON DELETE CASCADE, source_id INTEGER NOT NULL, first_name TEXT NOT NULL, second_name TEXT NOT NULL, web_name TEXT NOT NULL, position SMALLINT NOT NULL, team_id BIGINT NOT NULL REFERENCES teams(id), price NUMERIC(5,1) NOT NULL, total_points INTEGER NOT NULL DEFAULT 0, form NUMERIC(6,2) NOT NULL DEFAULT 0, minutes INTEGER NOT NULL DEFAULT 0, value NUMERIC(8,2) NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'a', news TEXT NOT NULL DEFAULT '', chance_of_playing_next_round INTEGER, goals_scored INTEGER NOT NULL DEFAULT 0, assists INTEGER NOT NULL DEFAULT 0, clean_sheets INTEGER NOT NULL DEFAULT 0, bonus INTEGER NOT NULL DEFAULT 0, saves INTEGER NOT NULL DEFAULT 0, expected_minutes NUMERIC(6,4) NOT NULL DEFAULT 0, recent_returns NUMERIC(8,4) NOT NULL DEFAULT 0, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE (season_id, source_id))`,
-	`CREATE TABLE IF NOT EXISTS fixtures (id BIGSERIAL PRIMARY KEY, season_id BIGINT NOT NULL REFERENCES seasons(id) ON DELETE CASCADE, source_id INTEGER NOT NULL, gameweek_id BIGINT REFERENCES gameweeks(id), kickoff_time TIMESTAMPTZ, finished BOOLEAN NOT NULL DEFAULT FALSE, team_home_id BIGINT NOT NULL REFERENCES teams(id), team_away_id BIGINT NOT NULL REFERENCES teams(id), team_home_difficulty INTEGER, team_away_difficulty INTEGER, team_home_score INTEGER, team_away_score INTEGER, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE (season_id, source_id))`,
-	`CREATE TABLE IF NOT EXISTS player_season_history (id BIGSERIAL PRIMARY KEY, player_id BIGINT NOT NULL REFERENCES players(id) ON DELETE CASCADE, season_id BIGINT NOT NULL REFERENCES seasons(id) ON DELETE CASCADE, source_id INTEGER NOT NULL, minutes INTEGER NOT NULL DEFAULT 0, goals_scored INTEGER NOT NULL DEFAULT 0, assists INTEGER NOT NULL DEFAULT 0, clean_sheets INTEGER NOT NULL DEFAULT 0, total_points INTEGER NOT NULL DEFAULT 0, UNIQUE (player_id, season_id, source_id))`,
-	`CREATE TABLE IF NOT EXISTS player_gameweek_history (id BIGSERIAL PRIMARY KEY, player_id BIGINT NOT NULL REFERENCES players(id) ON DELETE CASCADE, season_id BIGINT NOT NULL REFERENCES seasons(id) ON DELETE CASCADE, gameweek_id BIGINT NOT NULL REFERENCES gameweeks(id) ON DELETE CASCADE, minutes INTEGER NOT NULL DEFAULT 0, total_points INTEGER NOT NULL DEFAULT 0, goals_scored INTEGER NOT NULL DEFAULT 0, assists INTEGER NOT NULL DEFAULT 0, clean_sheets INTEGER NOT NULL DEFAULT 0, bonus INTEGER NOT NULL DEFAULT 0, value NUMERIC(5,1), UNIQUE (player_id, gameweek_id))`,
-	`CREATE TABLE IF NOT EXISTS sync_runs (id BIGSERIAL PRIMARY KEY, status TEXT NOT NULL CHECK (status IN ('running', 'success', 'partial', 'failed')), started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), finished_at TIMESTAMPTZ, active_season_source_id INTEGER, warning TEXT, checksum TEXT)`,
-	`CREATE TABLE IF NOT EXISTS sync_stages (id BIGSERIAL PRIMARY KEY, sync_run_id BIGINT NOT NULL REFERENCES sync_runs(id) ON DELETE CASCADE, stage TEXT NOT NULL, status TEXT NOT NULL, processed_count INTEGER NOT NULL DEFAULT 0, failed_count INTEGER NOT NULL DEFAULT 0, error TEXT, started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), finished_at TIMESTAMPTZ)`,
-	`CREATE TABLE IF NOT EXISTS sync_diagnostics (id BIGSERIAL PRIMARY KEY, sync_run_id BIGINT NOT NULL REFERENCES sync_runs(id) ON DELETE CASCADE, endpoint TEXT NOT NULL, checksum TEXT NOT NULL, error TEXT, payload JSONB, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`,
-	`CREATE TABLE IF NOT EXISTS squad_plans (id BIGSERIAL PRIMARY KEY, name TEXT NOT NULL DEFAULT 'My FPL squad', budget NUMERIC(5,1) NOT NULL DEFAULT 100.0, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`,
-	`CREATE TABLE IF NOT EXISTS squad_plan_players (plan_id BIGINT NOT NULL REFERENCES squad_plans(id) ON DELETE CASCADE, player_id BIGINT NOT NULL REFERENCES players(id), purchase_price NUMERIC(5,1) NOT NULL, PRIMARY KEY (plan_id, player_id))`,
-	`CREATE TABLE IF NOT EXISTS squad_lineups (plan_id BIGINT PRIMARY KEY REFERENCES squad_plans(id) ON DELETE CASCADE, starting_player_ids BIGINT[] NOT NULL DEFAULT '{}', bench_player_ids BIGINT[] NOT NULL DEFAULT '{}', captain_player_id BIGINT REFERENCES players(id), vice_captain_player_id BIGINT REFERENCES players(id), formation TEXT, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`,
-	`ALTER TABLE players ADD COLUMN IF NOT EXISTS expected_minutes NUMERIC(6,4) NOT NULL DEFAULT 0`,
-	`ALTER TABLE players ADD COLUMN IF NOT EXISTS recent_returns NUMERIC(8,4) NOT NULL DEFAULT 0`,
-	`CREATE INDEX IF NOT EXISTS idx_players_active_research ON players (season_id, position, status, form DESC, total_points DESC)`,
-	`CREATE INDEX IF NOT EXISTS idx_players_team ON players (season_id, team_id)`,
-	`CREATE INDEX IF NOT EXISTS idx_players_price ON players (season_id, price)`,
-	`CREATE INDEX IF NOT EXISTS idx_fixtures_upcoming ON fixtures (season_id, kickoff_time, finished)`,
-	`CREATE INDEX IF NOT EXISTS idx_fixtures_team_home ON fixtures (season_id, team_home_id, kickoff_time)`,
-	`CREATE INDEX IF NOT EXISTS idx_fixtures_team_away ON fixtures (season_id, team_away_id, kickoff_time)`,
-	`CREATE INDEX IF NOT EXISTS idx_player_history_gameweek ON player_gameweek_history (player_id, season_id, gameweek_id)`,
-	`INSERT INTO squad_plans (name) SELECT 'My FPL squad' WHERE NOT EXISTS (SELECT 1 FROM squad_plans)`,
-	`INSERT INTO schema_migrations (version) VALUES ('000001_foundation'), ('000002_history_and_sync'), ('000003_planning'), ('000004_indexes') ON CONFLICT (version) DO NOTHING`,
+	if applied == 0 {
+		return fmt.Errorf("database has no applied migrations; run db/migrate.sh before starting the backend")
+	}
+	var missing string
+	if err := r.db.QueryRowContext(ctx, `SELECT required.table_name FROM (VALUES ('dataset_snapshots'), ('source_payloads'), ('sync_work_items'), ('player_snapshots'), ('player_gameweek_facts')) AS required(table_name) LEFT JOIN information_schema.tables actual ON actual.table_schema='public' AND actual.table_name=required.table_name WHERE actual.table_name IS NULL ORDER BY required.table_name LIMIT 1`).Scan(&missing); err != nil {
+		if err == sql.ErrNoRows {
+			return nil
+		}
+		return fmt.Errorf("check warehouse schema: %w", err)
+	}
+	return fmt.Errorf("required warehouse table %q is missing; run db/migrate.sh", missing)
 }
 
 func (r *PostgresRepository) LoadSnapshot(ctx context.Context) (Snapshot, bool, error) {
@@ -122,6 +120,32 @@ func (r *PostgresRepository) LoadSnapshot(ctx context.Context) (Snapshot, bool, 
 		return Snapshot{}, false, err
 	}
 	return snapshot, true, nil
+}
+
+func (r *PostgresRepository) ListDatasetSnapshots(ctx context.Context, scope Scope) ([]DatasetSnapshot, error) {
+	query := `SELECT id::text, dataset, state, s.source_id, COALESCE(g.source_id, 0), source_fetched_at, normalized_at, normalizer_version, missing_inputs FROM dataset_snapshots d JOIN seasons s ON s.id=d.season_id LEFT JOIN gameweeks g ON g.id=d.gameweek_id WHERE ($1=0 OR s.source_id=$1) AND ($2=0 OR g.source_id=$2) AND ($3='' OR d.dataset=$3) ORDER BY d.normalized_at DESC`
+	rows, err := r.db.QueryContext(ctx, query, scope.SeasonID, scope.Gameweek, scope.Dataset)
+	if err != nil {
+		return nil, fmt.Errorf("list dataset snapshots: %w", err)
+	}
+	defer rows.Close()
+	items := []DatasetSnapshot{}
+	for rows.Next() {
+		var item DatasetSnapshot
+		var sourceFetched sql.NullTime
+		var missing []byte
+		if err := rows.Scan(&item.ID, &item.Dataset, &item.State, &item.SeasonID, &item.Gameweek, &sourceFetched, &item.NormalizedAt, &item.NormalizerVersion, &missing); err != nil {
+			return nil, err
+		}
+		if sourceFetched.Valid {
+			item.SourceFetchedAt = sourceFetched.Time
+		}
+		if len(missing) > 0 {
+			_ = json.Unmarshal(missing, &item.MissingInputs)
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
 }
 
 func (r *PostgresRepository) currentSeasonID(ctx context.Context) (int64, error) {
@@ -347,7 +371,15 @@ func (r *PostgresRepository) SaveSquad(ctx context.Context, squad Squad) error {
 	return r.WithTransaction(ctx, func(tx *sql.Tx) error {
 		var planID int64
 		if err := tx.QueryRowContext(ctx, `SELECT id FROM squad_plans ORDER BY id LIMIT 1`).Scan(&planID); err != nil {
-			return err
+			if err != sql.ErrNoRows {
+				return err
+			}
+			if _, insertErr := tx.ExecContext(ctx, `INSERT INTO squad_plans (name, budget) VALUES ($1,$2)`, squad.Name, squad.Budget); insertErr != nil {
+				return insertErr
+			}
+			if queryErr := tx.QueryRowContext(ctx, `SELECT id FROM squad_plans ORDER BY id LIMIT 1`).Scan(&planID); queryErr != nil {
+				return queryErr
+			}
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE squad_plans SET name=$1, budget=$2, updated_at=NOW() WHERE id=$3`, squad.Name, squad.Budget, planID); err != nil {
 			return err

@@ -3,7 +3,10 @@ package app
 import (
 	"context"
 	"database/sql"
+	"fmt"
+	"net/url"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -12,6 +15,9 @@ func TestPostgresRepositoryPersistence(t *testing.T) {
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
 		t.Skip("set TEST_DATABASE_URL to run PostgreSQL persistence tests")
+	}
+	if err := assertDisposableTestDatabase(dsn); err != nil {
+		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -89,6 +95,16 @@ func TestPostgresRepositoryPersistence(t *testing.T) {
 	if runCount != 1 || stageCount != 2 || diagnosticCount != 1 {
 		t.Fatalf("sync diagnostics not persisted: runs=%d stages=%d diagnostics=%d", runCount, stageCount, diagnosticCount)
 	}
+	if err := repository.RecordSourceObservation(ctx, SourceObservation{Endpoint: "/bootstrap-static/", FetchedAt: time.Now().UTC(), HTTPStatus: 200, Checksum: "source-checksum", ValidationState: "valid", SchemaVersion: "fpl-public-v1", Payload: []byte(`{"events":[]}`)}); err != nil {
+		t.Fatal(err)
+	}
+	var payloadCount int
+	if err := database.QueryRowContext(ctx, `SELECT COUNT(*) FROM source_payloads WHERE checksum='source-checksum'`).Scan(&payloadCount); err != nil {
+		t.Fatal(err)
+	}
+	if payloadCount != 1 {
+		t.Fatalf("source observation not persisted: %d", payloadCount)
+	}
 
 	transactional := interface{}(repository).(TransactionalRepository)
 	if err := transactional.WithTransaction(ctx, func(tx *sql.Tx) error {
@@ -106,4 +122,22 @@ func TestPostgresRepositoryPersistence(t *testing.T) {
 	if rolledBack != 0 {
 		t.Fatalf("transaction did not roll back: %d rows", rolledBack)
 	}
+}
+
+func assertDisposableTestDatabase(dsn string) error {
+	parsed, err := url.Parse(dsn)
+	if err != nil {
+		return fmt.Errorf("TEST_DATABASE_URL is invalid: %w", err)
+	}
+	database := strings.ToLower(strings.TrimPrefix(parsed.Path, "/"))
+	if database == "" || (!strings.Contains(database, "test") && !strings.Contains(database, "ci")) {
+		return fmt.Errorf("refusing integration test database %q: name must contain test or ci", database)
+	}
+	if strings.Contains(database, "prod") || strings.Contains(database, "production") {
+		return fmt.Errorf("refusing production-like integration test database %q", database)
+	}
+	if parsed.Hostname() == "" {
+		return fmt.Errorf("TEST_DATABASE_URL must include a host")
+	}
+	return nil
 }

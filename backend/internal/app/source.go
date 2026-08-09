@@ -12,14 +12,51 @@ import (
 )
 
 type FPLSource struct {
-	BaseURL string
-	Client  *http.Client
-	Retries int
+	BaseURL       string
+	Client        *http.Client
+	Retries       int
+	OnObservation func(SourceObservation)
+}
+type SourceObservation struct {
+	Endpoint        string
+	FetchedAt       time.Time
+	HTTPStatus      int
+	Checksum        string
+	ValidationState string
+	SchemaVersion   string
+	Payload         json.RawMessage
+	Diagnostic      string
 }
 type bootstrapResponse struct {
-	Events   []sourceEvent   `json:"events"`
-	Teams    []sourceTeam    `json:"teams"`
-	Elements []sourceElement `json:"elements"`
+	Events       []sourceEvent       `json:"events"`
+	Phases       []sourcePhase       `json:"phases"`
+	Settings     json.RawMessage     `json:"game_settings"`
+	ElementTypes []sourceElementType `json:"element_types"`
+	Teams        []sourceTeam        `json:"teams"`
+	Elements     []sourceElement     `json:"elements"`
+}
+
+type sourcePhase struct {
+	ID         int    `json:"id"`
+	Name       string `json:"name"`
+	StartEvent int    `json:"start_event"`
+	StopEvent  int    `json:"stop_event"`
+}
+type sourceElementType struct {
+	ID           int    `json:"id"`
+	SingularName string `json:"singular_name"`
+	PluralName   string `json:"plural_name"`
+	SquadSelect  int    `json:"squad_select"`
+	SquadMin     int    `json:"squad_min_select"`
+	SquadMax     int    `json:"squad_max_select"`
+}
+type BootstrapCatalog struct {
+	Events       []sourceEvent
+	Phases       []sourcePhase
+	Settings     json.RawMessage
+	ElementTypes []sourceElementType
+	Teams        []sourceTeam
+	Elements     []sourceElement
 }
 type sourceEvent struct {
 	ID           int        `json:"id"`
@@ -82,6 +119,42 @@ type sourceHistory struct {
 	Value       int `json:"value"`
 }
 
+type LivePlayerStats struct {
+	PlayerID        int    `json:"element"`
+	Minutes         int    `json:"minutes"`
+	Points          int    `json:"total_points"`
+	Goals           int    `json:"goals_scored"`
+	Assists         int    `json:"assists"`
+	CleanSheets     int    `json:"clean_sheets"`
+	Bonus           int    `json:"bonus"`
+	BPS             int    `json:"bps"`
+	Saves           int    `json:"saves"`
+	YellowCards     int    `json:"yellow_cards"`
+	RedCards        int    `json:"red_cards"`
+	OwnGoals        int    `json:"own_goals"`
+	PenaltiesSaved  int    `json:"penalties_saved"`
+	PenaltiesMissed int    `json:"penalties_missed"`
+	ExpectedGoals   string `json:"expected_goals"`
+	ExpectedAssists string `json:"expected_assists"`
+}
+type EventLive struct {
+	Elements []LivePlayerStats `json:"elements"`
+}
+type FutureFixture struct {
+	ID          int        `json:"id"`
+	Event       *int       `json:"event"`
+	KickoffTime *time.Time `json:"kickoff_time"`
+	TeamH       int        `json:"team_h"`
+	TeamA       int        `json:"team_a"`
+	IsHome      bool       `json:"is_home"`
+	Difficulty  int        `json:"difficulty"`
+}
+type ElementSummary struct {
+	History     []sourceHistory          `json:"history"`
+	HistoryPast []map[string]interface{} `json:"history_past"`
+	Fixtures    []FutureFixture          `json:"fixtures"`
+}
+
 func NewFPLSource(baseURL string) *FPLSource {
 	return &FPLSource{BaseURL: strings.TrimRight(baseURL, "/"), Client: &http.Client{Timeout: 20 * time.Second}, Retries: 2}
 }
@@ -103,25 +176,62 @@ func (f *FPLSource) get(ctx context.Context, path string, target interface{}) (s
 			last = readErr
 			continue
 		}
-		if response.StatusCode >= 500 {
+		if response.StatusCode >= 500 || response.StatusCode == http.StatusTooManyRequests {
 			last = fmt.Errorf("source returned %s", response.Status)
-			time.Sleep(time.Duration(attempt+1) * 150 * time.Millisecond)
+			wait := time.Duration(attempt+1) * 150 * time.Millisecond
+			if retryAfter := response.Header.Get("Retry-After"); retryAfter != "" {
+				if seconds, parseErr := time.ParseDuration(retryAfter + "s"); parseErr == nil {
+					wait = seconds
+				}
+			}
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-time.After(wait):
+			}
 			continue
 		}
 		if response.StatusCode < 200 || response.StatusCode >= 300 {
 			return "", fmt.Errorf("source returned %s", response.Status)
 		}
+		checksum := fmt.Sprintf("%x", sha256.Sum256(body))
 		if err := json.Unmarshal(body, target); err != nil {
+			if f.OnObservation != nil {
+				f.OnObservation(SourceObservation{Endpoint: path, FetchedAt: time.Now().UTC(), HTTPStatus: response.StatusCode, Checksum: checksum, ValidationState: "invalid", SchemaVersion: "fpl-public-v1", Diagnostic: err.Error()})
+			}
 			return "", fmt.Errorf("decode %s: %w", path, err)
 		}
-		return fmt.Sprintf("%x", sha256.Sum256(body)), nil
+		if f.OnObservation != nil {
+			f.OnObservation(SourceObservation{Endpoint: path, FetchedAt: time.Now().UTC(), HTTPStatus: response.StatusCode, Checksum: checksum, ValidationState: "valid", SchemaVersion: "fpl-public-v1", Payload: append(json.RawMessage(nil), body...)})
+		}
+		return checksum, nil
 	}
 	return "", last
 }
 
+func (f *FPLSource) Bootstrap(ctx context.Context) (BootstrapCatalog, string, error) {
+	var payload bootstrapResponse
+	checksum, err := f.get(ctx, "/bootstrap-static/", &payload)
+	if err != nil {
+		return BootstrapCatalog{}, "", err
+	}
+	return BootstrapCatalog{Events: payload.Events, Phases: payload.Phases, Settings: payload.Settings, ElementTypes: payload.ElementTypes, Teams: payload.Teams, Elements: payload.Elements}, checksum, nil
+}
+
+func (f *FPLSource) EventLive(ctx context.Context, gameweek int) (EventLive, string, error) {
+	var payload EventLive
+	checksum, err := f.get(ctx, fmt.Sprintf("/event/%d/live/", gameweek), &payload)
+	return payload, checksum, err
+}
+
+func (f *FPLSource) ElementSummary(ctx context.Context, playerID int) (ElementSummary, string, error) {
+	var payload ElementSummary
+	checksum, err := f.get(ctx, fmt.Sprintf("/element-summary/%d/", playerID), &payload)
+	return payload, checksum, err
+}
+
 func (f *FPLSource) Snapshot(ctx context.Context) (Season, []Gameweek, []Team, []Player, []Fixture, string, error) {
-	var bootstrap bootstrapResponse
-	checksum, err := f.get(ctx, "/bootstrap-static/", &bootstrap)
+	catalog, checksum, err := f.Bootstrap(ctx)
 	if err != nil {
 		return Season{}, nil, nil, nil, nil, "", err
 	}
@@ -132,16 +242,16 @@ func (f *FPLSource) Snapshot(ctx context.Context) (Season, []Gameweek, []Team, [
 	}
 	checksum = checksum + ":" + fixtureChecksum
 	season := Season{ID: 1, Name: fmt.Sprintf("%d/%d", time.Now().Year(), time.Now().Year()+1), IsCurrent: true, UpdatedAt: time.Now().UTC()}
-	weeks := make([]Gameweek, 0, len(bootstrap.Events))
-	for _, event := range bootstrap.Events {
+	weeks := make([]Gameweek, 0, len(catalog.Events))
+	for _, event := range catalog.Events {
 		weeks = append(weeks, Gameweek{ID: event.ID, Name: event.Name, DeadlineTime: event.DeadlineTime, Finished: event.Finished, IsCurrent: event.IsCurrent, AverageScore: event.AverageScore})
 	}
-	teams := make([]Team, 0, len(bootstrap.Teams))
-	for _, team := range bootstrap.Teams {
+	teams := make([]Team, 0, len(catalog.Teams))
+	for _, team := range catalog.Teams {
 		teams = append(teams, Team{ID: team.ID, Name: team.Name, ShortName: team.ShortName})
 	}
-	players := make([]Player, 0, len(bootstrap.Elements))
-	for _, player := range bootstrap.Elements {
+	players := make([]Player, 0, len(catalog.Elements))
+	for _, player := range catalog.Elements {
 		players = append(players, Player{ID: player.ID, FirstName: player.FirstName, SecondName: player.SecondName, WebName: player.WebName, Position: player.ElementType, TeamID: player.Team, Price: float64(player.NowCost) / 10, TotalPoints: player.TotalPoints, Form: parseFloat(player.Form), Minutes: player.Minutes, Value: parseFloat(player.ValueForm), Status: player.Status, News: player.News, ChanceOfPlaying: player.Chance, GoalsScored: player.Goals, Assists: player.Assists, CleanSheets: player.CleanSheets, Bonus: player.Bonus, Saves: player.Saves, ExpectedMinutes: minutesSignal(player.Minutes), RecentReturns: float64(player.Goals+player.Assists) / 10})
 	}
 	normalizedFixtures := make([]Fixture, 0, len(fixtures))

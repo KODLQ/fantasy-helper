@@ -66,3 +66,22 @@ func TestAPIHandlesEmptyAndUnknownResearchResults(t *testing.T) {
 		t.Fatalf("unknown player status = %d", unknown.Code)
 	}
 }
+
+func TestDatasetSnapshotsUseCommonResponseEnvelope(t *testing.T) {
+	api := NewAPI(NewStore(), NewFPLSource("http://127.0.0.1:1"), nil, nil)
+	recorder := httptest.NewRecorder()
+	api.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/data/snapshots", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d", recorder.Code)
+	}
+	var body struct {
+		Data []DatasetSnapshot `json:"data"`
+		Meta ResponseMeta      `json:"meta"`
+	}
+	if err := json.NewDecoder(recorder.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Data) != 1 || body.Meta.RequestID == "" || body.Meta.Freshness.Status == "" {
+		t.Fatalf("unexpected common response: %#v", body)
+	}
+}

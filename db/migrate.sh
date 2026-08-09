@@ -15,7 +15,11 @@ SQL
 MIGRATIONS_DIR="${MIGRATIONS_DIR:-${SCRIPT_DIR}/migrations}"
 
 for migration in "${MIGRATIONS_DIR}"/*.up.sql; do
-  version=$(basename "${migration}" .up.sql)
+	version=$(basename "${migration}" .up.sql)
+	case "${version}" in
+		[0-9][0-9][0-9][0-9][0-9][0-9]_*) ;;
+		*) echo "Invalid migration filename: ${version}" >&2; exit 1 ;;
+	esac
   applied=$(psql "${DATABASE_URL}" -Atc "SELECT version FROM schema_migrations WHERE version = '${version}'")
   if [ -n "${applied}" ]; then
     echo "Skipping ${version}"
