@@ -139,4 +139,3 @@ The global selector SHALL have an accessible name, keyboard support, visible cur
 #### Scenario: Content request fails
 - **WHEN** a player, fixture, or analysis request fails after the season catalogue loaded
 - **THEN** the selector remains usable and the content view reports its own error without losing season context
-

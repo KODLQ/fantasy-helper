@@ -50,4 +50,3 @@ The warehouse SHALL maintain at most one official-current season, and historical
 #### Scenario: Historical data is imported after rollover
 - **WHEN** a prior season archive is imported or reconciled after a newer official season became current
 - **THEN** the newer season remains current and the imported prior season remains historical
-
