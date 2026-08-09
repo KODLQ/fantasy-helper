@@ -1,18 +1,18 @@
 ## 1. Dependency and configuration
 
-- [ ] 1.1 Verify the public warehouse provides season, gameweek, player, and team foreign-key identities.
+- [x] 1.1 Verify the public warehouse provides season, gameweek, player, and team foreign-key identities.
 - [ ] 1.2 Add configured manager-entry and classic-league scope storage with enable/disable state.
-- [ ] 1.3 Add a session-provider interface and local secret injection without plaintext cookie persistence.
-- [ ] 1.4 Add source-client redaction and security tests for headers, logs, diagnostics, and errors.
+- [x] 1.3 Add a session-provider interface and local secret injection without plaintext cookie persistence.
+- [x] 1.4 Add source-client redaction and security tests for headers, logs, diagnostics, and errors.
 - [ ] 1.5 Define manager API envelopes, freshness fields, pagination, validation errors, and scope requirements.
 - [ ] 1.6 Define remote FPL session states, provider types, per-user ownership, reauthentication, revocation, retention, export, and deletion contracts.
 
 ## 2. Manager data model and adapter
 
-- [ ] 2.1 Add manager entry, season summary, gameweek summary, picks, automatic substitutions, chips, and transfer tables.
-- [ ] 2.1a Add active-team snapshot tables for imported player membership, lineup, captaincy, bank/value, chips, source gameweek, and freshness.
-- [ ] 2.2 Add source adapter methods for entry summary, history, transfers, and gameweek picks.
-- [ ] 2.3 Add optional authenticated adapter methods for `/me/` and `/my-team/{entry_id}/`.
+- [x] 2.1 Add manager entry, season summary, gameweek summary, picks, automatic substitutions, chips, and transfer tables.
+- [x] 2.1a Add active-team snapshot tables for imported player membership, lineup, captaincy, bank/value, chips, source gameweek, and freshness.
+- [x] 2.2 Add source adapter methods for entry summary, history, transfers, and gameweek picks.
+- [x] 2.3 Add optional authenticated adapter methods for `/me/` and `/my-team/{entry_id}/`.
 - [ ] 2.4 Normalize manager source payloads into season/gameweek facts with raw checksums and redacted metadata.
 - [ ] 2.5 Add sanitized fixtures and tests for valid, missing, unauthorized, expired-session, and partial responses.
 - [ ] 2.6 Add provenance/checksum/normalization-version fields and source-conflict representation.
@@ -26,7 +26,7 @@
 - [ ] 3.4 Implement optional private-team synchronization behind explicit session configuration.
 - [ ] 3.5 Ensure manager failures cannot change public warehouse sync state.
 - [ ] 3.6 Persist the latest active-team snapshot independently from the planning squad.
-- [ ] 3.7 Implement deterministic league-member selection by explicit IDs, rank range, and member limit.
+- [x] 3.7 Implement deterministic league-member selection by explicit IDs, rank range, and member limit.
 - [ ] 3.8 Add synchronized member-pick work items linked to reusable entry/gameweek snapshots.
 - [ ] 3.9 Add remote-session expiry/permission handling that stops private retries, retains prior facts, and leaves public sync independent.
 
