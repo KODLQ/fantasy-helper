@@ -94,7 +94,7 @@ func (r *PostgresRepository) StartSyncRun(ctx context.Context, scope Scope, corr
 		if err := tx.QueryRowContext(ctx, `INSERT INTO sync_runs (status, scope, season_source_id, gameweek_source_id, correlation_id) VALUES ('running',$1,$2,$3,$4) RETURNING id`, scope.Dataset, nullableInt(scope.SeasonID), nullableInt(scope.Gameweek), nullableString(correlationID)).Scan(&id); err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE sync_work_items SET sync_run_id=$1 WHERE sync_run_id=(SELECT id FROM sync_runs WHERE status='partial' AND scope=$2 AND COALESCE(season_source_id,0)=COALESCE($3,0) AND COALESCE(gameweek_source_id,0)=COALESCE($4,0) ORDER BY started_at DESC, id DESC LIMIT 1) AND status='pending'`, id, scope.Dataset, nullableInt(scope.SeasonID), nullableInt(scope.Gameweek)); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE sync_work_items SET sync_run_id=$1 WHERE sync_run_id=(SELECT id FROM sync_runs WHERE status='partial' AND scope=$2 AND COALESCE(season_source_id,0)=COALESCE($3,0) AND COALESCE(gameweek_source_id,0)=COALESCE($4,0) ORDER BY started_at DESC, id DESC LIMIT 1) AND status IN ('pending','retryable')`, id, scope.Dataset, nullableInt(scope.SeasonID), nullableInt(scope.Gameweek)); err != nil {
 			return fmt.Errorf("resume pending sync work: %w", err)
 		}
 		return nil
@@ -116,10 +116,10 @@ func (r *PostgresRepository) FinishSyncRun(ctx context.Context, runID int64, sta
 
 func (r *PostgresRepository) LoadLatestSyncStatus(ctx context.Context) (SyncStatus, error) {
 	var status SyncStatus
-	var scope, warning, checksum sql.NullString
+	var scope, warning, checksum, correlationID sql.NullString
 	var seasonID, gameweek sql.NullInt64
 	var finished sql.NullTime
-	err := r.db.QueryRowContext(ctx, `SELECT id, status, scope, season_source_id, gameweek_source_id, started_at, finished_at, warning, checksum FROM sync_runs ORDER BY started_at DESC, id DESC LIMIT 1`).Scan(&status.RunID, &status.Status, &scope, &seasonID, &gameweek, &status.StartedAt, &finished, &warning, &checksum)
+	err := r.db.QueryRowContext(ctx, `SELECT id, status, scope, season_source_id, gameweek_source_id, started_at, finished_at, warning, checksum, correlation_id FROM sync_runs ORDER BY started_at DESC, id DESC LIMIT 1`).Scan(&status.RunID, &status.Status, &scope, &seasonID, &gameweek, &status.StartedAt, &finished, &warning, &checksum, &correlationID)
 	if err == sql.ErrNoRows {
 		return SyncStatus{Status: "empty", Freshness: Freshness{Status: "unavailable", State: "unavailable"}}, nil
 	}
@@ -141,6 +141,9 @@ func (r *PostgresRepository) LoadLatestSyncStatus(ctx context.Context) (SyncStat
 	}
 	if checksum.Valid {
 		status.Checksum = checksum.String
+	}
+	if correlationID.Valid {
+		status.CorrelationID = correlationID.String
 	}
 	stageRows, err := r.db.QueryContext(ctx, `SELECT stage, status FROM sync_stages WHERE sync_run_id=$1 ORDER BY id`, status.RunID)
 	if err != nil {

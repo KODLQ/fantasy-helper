@@ -65,5 +65,6 @@ func main() {
 	<-stop
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer cancel()
+	_ = api.Shutdown(ctx)
 	_ = server.Shutdown(ctx)
 }

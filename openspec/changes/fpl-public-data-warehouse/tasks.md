@@ -33,7 +33,7 @@
 - [x] 3.7 Add scope locks and duplicate-run prevention for equivalent season/gameweek datasets.
 - [ ] 3.8 Add configurable timeout, retry, jitter, `Retry-After`, and per-host concurrency behavior with metrics.
 - [ ] 3.9 Add catalog, fixture, live, finalization, and reconciliation cadence policies with scheduler tests.
-- [ ] 3.10 Add coordinator cancellation, shutdown wait, correlation IDs, sync metrics, and duplicate-scope locking.
+- [x] 3.10 Add coordinator cancellation, shutdown wait, correlation IDs, sync metrics, and duplicate-scope locking.
 - [ ] 3.11 Batch snapshot/history writes and test last-known-good merge plus explicit cache refresh after commit.
 
 ## 4. API and analytical read models

@@ -21,6 +21,19 @@ type API struct {
 	Logger      *slog.Logger
 	Repository  Repository
 	SyncWorkers int
+	syncMu      sync.Mutex
+	syncCancels map[uint64]context.CancelFunc
+	syncWait    sync.WaitGroup
+	nextSyncID  uint64
+	metrics     SyncMetrics
+}
+
+type SyncMetrics struct {
+	Started   uint64 `json:"started"`
+	Completed uint64 `json:"completed"`
+	Partial   uint64 `json:"partial"`
+	Failed    uint64 `json:"failed"`
+	Cancelled uint64 `json:"cancelled"`
 }
 
 func NewAPI(store *Store, source *FPLSource, dbHealthy func(context.Context) bool, logger *slog.Logger, repositories ...Repository) *API {
@@ -28,7 +41,7 @@ func NewAPI(store *Store, source *FPLSource, dbHealthy func(context.Context) boo
 	if len(repositories) > 0 {
 		repository = repositories[0]
 	}
-	api := &API{Store: store, Source: source, DBHealthy: dbHealthy, Logger: logger, Repository: repository, SyncWorkers: 6}
+	api := &API{Store: store, Source: source, DBHealthy: dbHealthy, Logger: logger, Repository: repository, SyncWorkers: 6, syncCancels: map[uint64]context.CancelFunc{}}
 	if recorder, ok := repository.(SourcePayloadRepository); ok && source != nil {
 		source.OnObservation = func(observation SourceObservation) {
 			if err := recorder.RecordSourceObservation(context.Background(), observation); err != nil && logger != nil {
@@ -37,6 +50,68 @@ func NewAPI(store *Store, source *FPLSource, dbHealthy func(context.Context) boo
 		}
 	}
 	return api
+}
+
+func (a *API) Metrics() SyncMetrics {
+	a.syncMu.Lock()
+	defer a.syncMu.Unlock()
+	return a.metrics
+}
+
+func (a *API) startSync(scope Scope, runID int64) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	a.syncMu.Lock()
+	a.nextSyncID++
+	token := a.nextSyncID
+	a.syncCancels[token] = cancel
+	a.syncWait.Add(1)
+	a.metrics.Started++
+	a.syncMu.Unlock()
+	go func() {
+		defer func() {
+			a.syncMu.Lock()
+			delete(a.syncCancels, token)
+			status := a.Store.SyncStatus()
+			if ctx.Err() == context.Canceled {
+				a.metrics.Cancelled++
+			} else {
+				switch status.Status {
+				case "success":
+					a.metrics.Completed++
+				case "partial":
+					a.metrics.Partial++
+				default:
+					a.metrics.Failed++
+				}
+			}
+			a.syncMu.Unlock()
+			a.syncWait.Done()
+		}()
+		a.runSync(ctx, scope, runID)
+	}()
+}
+
+func (a *API) Shutdown(ctx context.Context) error {
+	a.syncMu.Lock()
+	cancels := make([]context.CancelFunc, 0, len(a.syncCancels))
+	for _, cancel := range a.syncCancels {
+		cancels = append(cancels, cancel)
+	}
+	a.syncMu.Unlock()
+	for _, cancel := range cancels {
+		cancel()
+	}
+	done := make(chan struct{})
+	go func() {
+		a.syncWait.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 func (a *API) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -230,12 +305,10 @@ func (a *API) sync(w http.ResponseWriter, r *http.Request) {
 	if a.Repository != nil && running.RunID == 0 {
 		_ = a.Repository.RecordSyncStatus(r.Context(), running)
 	}
-	go a.runSync(scope, running.RunID)
+	a.startSync(scope, running.RunID)
 	writeEnvelope(w, http.StatusAccepted, w.Header().Get("X-Request-ID"), scope, a.Store.Freshness(), a.Store.SyncStatus())
 }
-func (a *API) runSync(scope Scope, runID int64) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
+func (a *API) runSync(ctx context.Context, scope Scope, runID int64) {
 	status := a.Store.SyncStatus()
 	status.Scope = scope
 	season, weeks, teams, players, fixtures, checksum, err := a.Source.Snapshot(ctx)

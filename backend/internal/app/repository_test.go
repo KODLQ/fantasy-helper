@@ -222,7 +222,7 @@ func TestPostgresSyncWorkQueueClaimsIdempotently(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.RunID != runID || loaded.Status != "success" || loaded.TotalWork != 1 || loaded.CompletedWork != 1 || loaded.FailedWork != 0 || loaded.RetryableWork != 0 {
+	if loaded.RunID != runID || loaded.Status != "success" || loaded.CorrelationID != "test-request" || loaded.TotalWork != 1 || loaded.CompletedWork != 1 || loaded.FailedWork != 0 || loaded.RetryableWork != 0 {
 		t.Fatalf("unexpected persisted sync status: %#v", loaded)
 	}
 	afterCompletionRun, err := repository.StartSyncRun(ctx, scope, "after-completion")

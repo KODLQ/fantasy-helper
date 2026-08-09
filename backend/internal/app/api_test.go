@@ -2,10 +2,12 @@ package app
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestAPIResearchSquadAndRecommendationFlow(t *testing.T) {
@@ -119,5 +121,35 @@ func TestResponseMetaSupportsProvenancePaginationAndCoverage(t *testing.T) {
 	}
 	if len(decoded.Provenance) != 2 || decoded.Pagination == nil || decoded.Pagination.Returned != 2 || decoded.Coverage == nil || decoded.Coverage.Complete {
 		t.Fatalf("metadata contract lost fields: %#v", decoded)
+	}
+}
+
+func TestAPISyncCoordinatorCancelsAndWaits(t *testing.T) {
+	started := make(chan struct{}, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/bootstrap-static/" {
+			started <- struct{}{}
+			<-r.Context().Done()
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+	source := NewFPLSourceWithSeason(server.URL, 2026, "2026/27")
+	api := NewAPI(NewStore(), source, nil, nil)
+	api.startSync(Scope{Dataset: "full"}, 0)
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("sync did not start")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := api.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+	metrics := api.Metrics()
+	if metrics.Started != 1 || metrics.Cancelled != 1 {
+		t.Fatalf("unexpected sync metrics: %#v", metrics)
 	}
 }

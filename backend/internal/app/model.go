@@ -124,6 +124,7 @@ type SyncStatus struct {
 	StartedAt       time.Time `json:"startedAt,omitempty"`
 	FinishedAt      time.Time `json:"finishedAt,omitempty"`
 	Checksum        string    `json:"checksum,omitempty"`
+	CorrelationID   string    `json:"correlationId,omitempty"`
 	Freshness       Freshness `json:"freshness"`
 	TotalWork       int       `json:"totalWork,omitempty"`
 	CompletedWork   int       `json:"completedWork,omitempty"`
