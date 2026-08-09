@@ -2,12 +2,19 @@
 set -eu
 
 BASE_URL=${1:-http://localhost:8080}
+FRONTEND_URL=${FRONTEND_URL:-http://localhost:5173}
+
+curl -fsS "${FRONTEND_URL}" >/dev/null
 
 health=$(curl -fsS "${BASE_URL}/healthz")
 printf '%s\n' "${health}" | grep -q '"status":"ok"'
 
 players=$(curl -fsS "${BASE_URL}/api/v1/players?sort=form&direction=desc&pageSize=3")
 printf '%s\n' "${players}" | grep -q '"items"'
+
+snapshots=$(curl -fsS "${BASE_URL}/api/v1/data/snapshots")
+printf '%s\n' "${snapshots}" | grep -q '"data"'
+printf '%s\n' "${snapshots}" | grep -q '"meta"'
 
 curl -fsS -X PUT "${BASE_URL}/api/v1/squad" \
   -H 'Content-Type: application/json' \
@@ -16,4 +23,3 @@ curl -fsS -X PUT "${BASE_URL}/api/v1/squad" \
 recommendation=$(curl -fsS -X POST "${BASE_URL}/api/v1/recommendations" -H 'Content-Type: application/json' --data '{}')
 printf '%s\n' "${recommendation}" | grep -q '"recommendation"'
 echo "Fantasy Helper smoke test passed against ${BASE_URL}"
-

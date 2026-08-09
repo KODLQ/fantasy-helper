@@ -7,7 +7,9 @@
     "dev": "vite --host 0.0.0.0",
     "build": "tsc -b && vite build",
     "lint": "tsc --noEmit",
+    "format:check": "node scripts/check-format.mjs",
     "test": "node --test tests/*.test.mjs",
+    "verify": "npm run format:check && npm run lint && npm test && npm run build",
     "test:e2e": "playwright test",
     "test:e2e:headed": "playwright test --headed",
     "test:e2e:headless": "PW_HEADLESS=true playwright test",
@@ -15,16 +17,16 @@
     "e2e:install": "playwright install chromium"
   },
   "dependencies": {
-    "@vitejs/plugin-react": "latest",
-    "vite": "latest",
-    "typescript": "latest",
-    "react": "latest",
-    "react-dom": "latest",
-    "lucide-react": "latest"
+    "@vitejs/plugin-react": "6.0.5",
+    "vite": "8.2.1",
+    "typescript": "7.0.2",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "lucide-react": "1.29.0"
   },
   "devDependencies": {
-    "@playwright/test": "latest",
-    "@types/react": "latest",
-    "@types/react-dom": "latest"
+    "@playwright/test": "1.62.1",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.4"
   }
 }
