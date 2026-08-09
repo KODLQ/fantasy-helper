@@ -46,9 +46,12 @@ func main() {
 	source.SeasonID = cfg.SourceSeasonID
 	source.SeasonName = cfg.SourceSeasonName
 	source.AllowDiscovery = cfg.SourceDiscovery
+	source.Client.Timeout = cfg.SourceTimeout
+	source.Retries = cfg.SourceRetries
 	api := app.NewAPI(store, source, func(ctx context.Context) bool {
 		return database.PingContext(ctx) == nil
 	}, logger, repository)
+	api.SyncWorkers = cfg.SyncWorkers
 	server := &http.Server{Addr: ":" + cfg.Port, Handler: api.Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)

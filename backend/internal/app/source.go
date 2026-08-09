@@ -251,18 +251,27 @@ func (f *FPLSource) Bootstrap(ctx context.Context) (BootstrapCatalog, string, er
 	if err != nil {
 		return BootstrapCatalog{}, "", err
 	}
+	if payload.Events == nil || payload.Teams == nil || payload.Elements == nil {
+		return BootstrapCatalog{}, checksum, fmt.Errorf("bootstrap-static response is missing events, teams, or elements")
+	}
 	return BootstrapCatalog{SeasonID: payload.SeasonID, SeasonName: payload.SeasonName, Events: payload.Events, Phases: payload.Phases, Settings: payload.Settings, ElementTypes: payload.ElementTypes, Teams: payload.Teams, Elements: payload.Elements}, checksum, nil
 }
 
 func (f *FPLSource) EventLive(ctx context.Context, gameweek int) (EventLive, string, error) {
 	var payload EventLive
 	checksum, err := f.get(ctx, fmt.Sprintf("/event/%d/live/", gameweek), &payload)
+	if err == nil && payload.Elements == nil {
+		return EventLive{}, checksum, fmt.Errorf("event-live response is missing elements")
+	}
 	return payload, checksum, err
 }
 
 func (f *FPLSource) ElementSummary(ctx context.Context, playerID int) (ElementSummary, string, error) {
 	var payload ElementSummary
 	checksum, err := f.get(ctx, fmt.Sprintf("/element-summary/%d/", playerID), &payload)
+	if err == nil && payload.History == nil && payload.HistoryPast == nil && payload.Fixtures == nil {
+		return ElementSummary{}, checksum, fmt.Errorf("element-summary response is missing history and fixtures")
+	}
 	return payload, checksum, err
 }
 
@@ -275,6 +284,9 @@ func (f *FPLSource) Snapshot(ctx context.Context) (Season, []Gameweek, []Team, [
 	fixtureChecksum, err := f.get(ctx, "/fixtures/", &fixtures)
 	if err != nil {
 		return Season{}, nil, nil, nil, nil, checksum, err
+	}
+	if fixtures == nil {
+		return Season{}, nil, nil, nil, nil, checksum, fmt.Errorf("fixtures response must be an array")
 	}
 	checksum = checksum + ":" + fixtureChecksum
 	seasonID, seasonName := f.SeasonID, f.SeasonName

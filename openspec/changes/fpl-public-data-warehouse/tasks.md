@@ -18,7 +18,7 @@
 - [ ] 2.3 Add event-live normalization for all player gameweek statistics and finalization state.
 - [ ] 2.4 Expand element-summary normalization to include history, history-past, and upcoming fixtures.
 - [x] 2.5 Store source payloads and checksums for every stage with bounded diagnostics.
-- [ ] 2.6 Add adapter fixtures and schema-validation tests for complete, partial, malformed, 429, and 5xx responses.
+- [x] 2.6 Add adapter fixtures and schema-validation tests for complete, partial, malformed, 429, and 5xx responses.
 - [x] 2.7 Publish typed source contracts for bootstrap, fixtures, event-live, and element-summary; retain unknown fields and test numeric/null/type changes.
 - [x] 2.8 Add explicit season ID/name configuration and tests proving no active season is hard-coded.
 
@@ -26,8 +26,8 @@
 
 - [ ] 3.1 Implement dependency-ordered initial catalog, fixture, live-data, and player-history stages.
 - [ ] 3.2 Implement durable work-item claiming, retry counts, backoff, `Retry-After`, and restart recovery.
-- [ ] 3.3 Add bounded concurrency and configurable request timeouts without blocking unrelated stages.
-- [ ] 3.4 Implement idempotent canonical upserts and last-known-good retention for failed work.
+- [x] 3.3 Add bounded concurrency and configurable request timeouts without blocking unrelated stages.
+- [x] 3.4 Implement idempotent canonical upserts and last-known-good retention for failed work.
 - [ ] 3.5 Add current-gameweek incremental refresh and completed-gameweek finalization.
 - [ ] 3.6 Add manual sync controls and an in-process scheduler configuration.
 - [x] 3.7 Add scope locks and duplicate-run prevention for equivalent season/gameweek datasets.

@@ -19,6 +19,9 @@ type Config struct {
 	SourceSeasonID   int
 	SourceSeasonName string
 	SourceDiscovery  bool
+	SourceTimeout    time.Duration
+	SourceRetries    int
+	SyncWorkers      int
 	Environment      string
 	DatabaseMaxConns int
 	DatabaseMaxIdle  int
@@ -50,6 +53,17 @@ func LoadConfig() (Config, error) {
 	if seasonID > 0 {
 		discovery = false
 	}
+	retries, err := envInt("FPL_SOURCE_RETRIES", 2)
+	if err != nil {
+		return Config{}, err
+	}
+	workers, err := envInt("SYNC_WORKERS", 6)
+	if err != nil {
+		return Config{}, err
+	}
+	if retries < 0 || workers < 1 {
+		return Config{}, fmt.Errorf("FPL_SOURCE_RETRIES must be non-negative and SYNC_WORKERS must be positive")
+	}
 	return Config{
 		Port:             configEnv("BACKEND_PORT", "8080"),
 		DatabaseURL:      os.Getenv("DATABASE_URL"),
@@ -57,6 +71,9 @@ func LoadConfig() (Config, error) {
 		SourceSeasonID:   seasonID,
 		SourceSeasonName: seasonName,
 		SourceDiscovery:  discovery,
+		SourceTimeout:    envDuration("FPL_SOURCE_TIMEOUT", 20*time.Second),
+		SourceRetries:    retries,
+		SyncWorkers:      workers,
 		Environment:      configEnv("APP_ENV", "local"),
 		DatabaseMaxConns: maxConns,
 		DatabaseMaxIdle:  maxIdle,

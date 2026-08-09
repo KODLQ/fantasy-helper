@@ -15,11 +15,12 @@ import (
 )
 
 type API struct {
-	Store      *Store
-	Source     *FPLSource
-	DBHealthy  func(context.Context) bool
-	Logger     *slog.Logger
-	Repository Repository
+	Store       *Store
+	Source      *FPLSource
+	DBHealthy   func(context.Context) bool
+	Logger      *slog.Logger
+	Repository  Repository
+	SyncWorkers int
 }
 
 func NewAPI(store *Store, source *FPLSource, dbHealthy func(context.Context) bool, logger *slog.Logger, repositories ...Repository) *API {
@@ -27,7 +28,7 @@ func NewAPI(store *Store, source *FPLSource, dbHealthy func(context.Context) boo
 	if len(repositories) > 0 {
 		repository = repositories[0]
 	}
-	api := &API{Store: store, Source: source, DBHealthy: dbHealthy, Logger: logger, Repository: repository}
+	api := &API{Store: store, Source: source, DBHealthy: dbHealthy, Logger: logger, Repository: repository, SyncWorkers: 6}
 	if recorder, ok := repository.(SourcePayloadRepository); ok && source != nil {
 		source.OnObservation = func(observation SourceObservation) {
 			if err := recorder.RecordSourceObservation(context.Background(), observation); err != nil && logger != nil {
@@ -318,7 +319,10 @@ func (a *API) syncHistories(ctx context.Context, players []Player, runID int64) 
 	if syncRepository, ok := a.Repository.(SyncWorkRepository); ok && runID > 0 {
 		return a.syncQueuedHistories(ctx, syncRepository, runID)
 	}
-	workers := 6
+	workers := a.SyncWorkers
+	if workers < 1 {
+		workers = 1
+	}
 	if len(players) < workers {
 		workers = len(players)
 	}
@@ -359,7 +363,10 @@ func (a *API) syncHistories(ctx context.Context, players []Player, runID int64) 
 }
 
 func (a *API) syncQueuedHistories(ctx context.Context, repository SyncWorkRepository, runID int64) (map[int][]PlayerHistory, []string) {
-	workers := 6
+	workers := a.SyncWorkers
+	if workers < 1 {
+		workers = 1
+	}
 	results := make(chan historyResult, workers)
 	var waitGroup sync.WaitGroup
 	for worker := 0; worker < workers; worker++ {

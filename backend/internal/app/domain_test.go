@@ -72,3 +72,20 @@ func TestSearchSortsByFormDescending(t *testing.T) {
 		t.Fatalf("results are not descending: %#v", players)
 	}
 }
+
+func TestApplySnapshotRetainsLastKnownGoodHistoryForFailedPlayers(t *testing.T) {
+	store := NewStore()
+	before := store.History(8)
+	if len(before) == 0 {
+		t.Fatal("expected seeded player history")
+	}
+	snapshot := store.ExportSnapshot()
+	snapshot.Histories = map[int][]PlayerHistory{9: {{Gameweek: 2, TotalPoints: 7}}}
+	store.ApplySnapshot(snapshot.Season, snapshot.Gameweeks, snapshot.Teams, snapshot.Players, snapshot.Fixtures, snapshot.Histories)
+	if len(store.History(8)) != len(before) {
+		t.Fatalf("last-known-good history was lost: before=%d after=%d", len(before), len(store.History(8)))
+	}
+	if len(store.History(9)) != 1 || store.History(9)[0].TotalPoints != 7 {
+		t.Fatalf("successful history was not refreshed: %#v", store.History(9))
+	}
+}

@@ -83,7 +83,9 @@ func (s *Store) ApplySnapshot(season Season, weeks []Gameweek, teams []Team, pla
 	s.teams = map[int]Team{}
 	s.players = map[int]Player{}
 	s.fixtures = fixtures
-	s.history = histories
+	for playerID, rows := range histories {
+		s.history[playerID] = append([]PlayerHistory{}, rows...)
+	}
 	for _, w := range weeks {
 		s.gameweeks[w.ID] = w
 	}
