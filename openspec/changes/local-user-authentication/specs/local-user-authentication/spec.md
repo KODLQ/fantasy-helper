@@ -83,3 +83,15 @@ The system SHALL allow registration to be disabled outside development and SHALL
 #### Scenario: Registration is disabled
 - **WHEN** a client submits registration while the registration policy is disabled
 - **THEN** the API returns `registration_disabled`, creates no account/session, and the UI does not show an enabled registration action
+
+### Requirement: Access authentication from the profile control
+
+The system SHALL present sign-in, registration, and authenticated account actions from the profile ring in the top-right application header and SHALL keep credential forms out of the persistent sidebar.
+
+#### Scenario: Unauthenticated user opens the profile control
+- **WHEN** an unauthenticated user activates the top-right profile ring
+- **THEN** an accessible profile dialog opens with sign-in and the configured registration option
+
+#### Scenario: Protected workspace requests authentication
+- **WHEN** an unauthenticated user activates the sign-in action on a protected workspace
+- **THEN** the same top-right profile dialog opens without embedding a second credential form in the workspace or sidebar

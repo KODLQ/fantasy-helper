@@ -50,6 +50,11 @@ type SeasonSquadRepository interface {
 	SaveSquadForSeason(context.Context, int, Squad) error
 }
 
+type UserSeasonSquadRepository interface {
+	LoadSquadForUserSeason(context.Context, int64, int) (Squad, bool, error)
+	SaveSquadForUserSeason(context.Context, int64, int, Squad) error
+}
+
 type HistoricalResearchRepository interface {
 	LoadPlayerAnalysis(context.Context, int, int, string, int) (PlayerAnalysis, bool, error)
 }
@@ -447,7 +452,7 @@ func (r *PostgresRepository) EnsureSchema(ctx context.Context) error {
 		return fmt.Errorf("database has no applied migrations; run db/migrate.sh before starting the backend")
 	}
 	var missing string
-	if err := r.db.QueryRowContext(ctx, `SELECT required.table_name FROM (VALUES ('dataset_snapshots'), ('source_payloads'), ('sync_work_items'), ('player_snapshots'), ('player_gameweek_facts')) AS required(table_name) LEFT JOIN information_schema.tables actual ON actual.table_schema='public' AND actual.table_name=required.table_name WHERE actual.table_name IS NULL ORDER BY required.table_name LIMIT 1`).Scan(&missing); err != nil {
+	if err := r.db.QueryRowContext(ctx, `SELECT required.table_name FROM (VALUES ('dataset_snapshots'), ('source_payloads'), ('sync_work_items'), ('player_snapshots'), ('player_gameweek_facts'), ('users'), ('sessions'), ('security_events')) AS required(table_name) LEFT JOIN information_schema.tables actual ON actual.table_schema='public' AND actual.table_name=required.table_name WHERE actual.table_name IS NULL ORDER BY required.table_name LIMIT 1`).Scan(&missing); err != nil {
 		if err == sql.ErrNoRows {
 			return nil
 		}
@@ -1083,9 +1088,26 @@ func (r *PostgresRepository) LoadSquad(ctx context.Context) (Squad, bool, error)
 }
 
 func (r *PostgresRepository) LoadSquadForSeason(ctx context.Context, seasonSourceID int) (Squad, bool, error) {
+	return r.loadSquadForOwner(ctx, nil, seasonSourceID)
+}
+
+func (r *PostgresRepository) LoadSquadForUserSeason(ctx context.Context, userID int64, seasonSourceID int) (Squad, bool, error) {
+	if userID <= 0 {
+		return Squad{}, false, fmt.Errorf("load squad requires an authenticated owner")
+	}
+	return r.loadSquadForOwner(ctx, &userID, seasonSourceID)
+}
+
+func (r *PostgresRepository) loadSquadForOwner(ctx context.Context, userID *int64, seasonSourceID int) (Squad, bool, error) {
 	var squad Squad
 	var planID int64
-	if err := r.db.QueryRowContext(ctx, `SELECT sp.id, sp.name, sp.budget FROM squad_plans sp JOIN seasons s ON s.id=sp.season_id WHERE s.source_id=$1 ORDER BY sp.id LIMIT 1`, seasonSourceID).Scan(&planID, &squad.Name, &squad.Budget); err != nil {
+	query := `SELECT sp.id, sp.name, sp.budget FROM squad_plans sp JOIN seasons s ON s.id=sp.season_id WHERE s.source_id=$1 AND sp.user_id IS NULL ORDER BY sp.id LIMIT 1`
+	arguments := []interface{}{seasonSourceID}
+	if userID != nil {
+		query = `SELECT sp.id, sp.name, sp.budget FROM squad_plans sp JOIN seasons s ON s.id=sp.season_id WHERE s.source_id=$1 AND sp.user_id=$2 ORDER BY sp.id LIMIT 1`
+		arguments = append(arguments, *userID)
+	}
+	if err := r.db.QueryRowContext(ctx, query, arguments...).Scan(&planID, &squad.Name, &squad.Budget); err != nil {
 		if err == sql.ErrNoRows {
 			return Squad{}, false, nil
 		}
@@ -1138,17 +1160,34 @@ func (r *PostgresRepository) SaveSquad(ctx context.Context, squad Squad) error {
 }
 
 func (r *PostgresRepository) SaveSquadForSeason(ctx context.Context, seasonSourceID int, squad Squad) error {
+	return r.saveSquadForOwner(ctx, nil, seasonSourceID, squad)
+}
+
+func (r *PostgresRepository) SaveSquadForUserSeason(ctx context.Context, userID int64, seasonSourceID int, squad Squad) error {
+	if userID <= 0 {
+		return fmt.Errorf("save squad requires an authenticated owner")
+	}
+	return r.saveSquadForOwner(ctx, &userID, seasonSourceID, squad)
+}
+
+func (r *PostgresRepository) saveSquadForOwner(ctx context.Context, userID *int64, seasonSourceID int, squad Squad) error {
 	return r.WithTransaction(ctx, func(tx *sql.Tx) error {
 		var planID int64
 		var seasonDBID int64
 		if err := tx.QueryRowContext(ctx, `SELECT id FROM seasons WHERE source_id=$1`, seasonSourceID).Scan(&seasonDBID); err != nil {
 			return fmt.Errorf("resolve squad season %d: %w", seasonSourceID, err)
 		}
-		if err := tx.QueryRowContext(ctx, `SELECT id FROM squad_plans WHERE season_id=$1 ORDER BY id LIMIT 1`, seasonDBID).Scan(&planID); err != nil {
+		planQuery := `SELECT id FROM squad_plans WHERE season_id=$1 AND user_id IS NULL ORDER BY id LIMIT 1`
+		planArguments := []interface{}{seasonDBID}
+		if userID != nil {
+			planQuery = `SELECT id FROM squad_plans WHERE season_id=$1 AND user_id=$2 ORDER BY id LIMIT 1`
+			planArguments = append(planArguments, *userID)
+		}
+		if err := tx.QueryRowContext(ctx, planQuery, planArguments...).Scan(&planID); err != nil {
 			if err != sql.ErrNoRows {
 				return err
 			}
-			if insertErr := tx.QueryRowContext(ctx, `INSERT INTO squad_plans (name, budget, season_id) VALUES ($1,$2,$3) RETURNING id`, squad.Name, squad.Budget, seasonDBID).Scan(&planID); insertErr != nil {
+			if insertErr := tx.QueryRowContext(ctx, `INSERT INTO squad_plans (name, budget, season_id, user_id) VALUES ($1,$2,$3,$4) RETURNING id`, squad.Name, squad.Budget, seasonDBID, userID).Scan(&planID); insertErr != nil {
 				return insertErr
 			}
 		}

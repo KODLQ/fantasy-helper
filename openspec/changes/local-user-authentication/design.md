@@ -16,7 +16,7 @@ In non-development environments registration defaults to disabled and must be ex
 
 Create `sessions` with session ID, a hash of the opaque token, user ID, created/last-seen/idle-expiry/absolute-expiry timestamps, revoked timestamp, and redacted device metadata. The raw token exists only in the browser cookie. Login rotates any pre-auth session, creates a new token, and sets a `__Host-` cookie where deployment permits, with `HttpOnly`, `SameSite=Lax`, `Secure` in HTTPS, path `/`, idle expiry, and an absolute maximum lifetime. Logout revokes the server-side session. Password change revokes all other sessions.
 
-State-changing requests require same-origin `Origin`/`Referer` validation and a CSRF token when the deployment mode requires cross-site protection. JSON APIs return 401/403 using the common error envelope; they do not redirect to HTML login pages.
+State-changing requests require same-origin `Origin`/`Referer` validation and a CSRF token when the deployment mode requires cross-site protection. The CSRF token is deterministically bound to the opaque session token, remains stable across concurrent `/auth/me` checks and browser tabs, and changes whenever login or password change rotates the session. JSON APIs return 401/403 using the common error envelope; they do not redirect to HTML login pages.
 
 ### 3. Credential and abuse handling
 
@@ -44,7 +44,7 @@ Public warehouse facts, source payloads, and season catalog are shared applicati
 
 ### 6. Browser and operational behavior
 
-The app has an unauthenticated entry page, a registration form when enabled, a login form, a logout action, and a session-expired state that preserves no private response data in client storage. Protected pages load only after `/auth/me` resolves. Password forms disable duplicate submits, show safe validation, and clear credential fields after failure. Playwright runs cover registration, login, reload persistence, logout, wrong credentials, duplicate email, expiry/revocation, protected-route denial, and ownership isolation with a disposable database.
+The app exposes authentication and account management from the profile ring in the top-right header. The sidebar remains focused on workspace navigation and synchronization. Clicking the profile ring opens the registration form when enabled or the login/account panel; protected-page calls to action open that same panel rather than rendering duplicate credential forms. The app also has a logout action and a session-expired state that preserves no private response data in client storage. Protected pages load only after `/auth/me` resolves. Password forms disable duplicate submits, show safe validation, and clear credential fields after failure. Playwright runs cover registration, login, reload persistence, logout, wrong credentials, duplicate email, expiry/revocation, protected-route denial, profile-menu keyboard behavior, and ownership isolation with a disposable database.
 
 ## Rollout and migration
 

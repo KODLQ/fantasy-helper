@@ -52,6 +52,9 @@ export type Season = {
   warnings: string[];
 };
 export type SyncStatus = { status: string; runId?: number; currentStage?: string; completedStages?: string[]; failedStages?: string[]; completedWork?: number; totalWork?: number; warning?: string; freshness: Freshness };
+export type AuthUser = { id: number; email: string; displayName: string; status: string; createdAt: string; updatedAt: string; lastLoginAt?: string };
+export type AuthSession = { user: AuthUser; csrfToken: string; expiresAt: string };
+export type AuthConfig = { registrationEnabled: boolean; emailProviderConfigured: boolean; minimumPasswordLength: number };
 export type ValidationError = { code: string; rule: string; message: string; current?: unknown; required?: unknown; playerId?: number };
 export type Squad = { name: string; budget: number; players: Player[]; purchasePrices: Record<number, number>; startingPlayerIds: number[]; benchPlayerIds: number[]; captainId: number; viceCaptainId: number; formation: string; totalCost: number; remainingBudget: number; validation: ValidationError[] };
 export type RecommendationPlayer = { player: Player; score: number; factors: { name: string; signal: number; weight: number; contribution: number }[]; fixture: string; explanation: string };
@@ -98,6 +101,8 @@ export type RequestMetrics = {
 };
 
 let telemetryListener: ((event: RequestTelemetry) => void) | undefined;
+let authenticationFailureListener: (() => void) | undefined;
+let csrfToken = '';
 const requestMetrics: RequestMetrics = { requests: 0, succeeded: 0, failed: 0, cancelled: 0, stale: 0 };
 
 export function setRequestTelemetryListener(listener?: (event: RequestTelemetry) => void) {
@@ -106,6 +111,14 @@ export function setRequestTelemetryListener(listener?: (event: RequestTelemetry)
 
 export function getRequestMetrics(): RequestMetrics {
   return { ...requestMetrics };
+}
+
+export function setAuthenticationFailureListener(listener?: () => void) {
+  authenticationFailureListener = listener;
+}
+
+export function clearAuthenticationState() {
+  csrfToken = '';
 }
 
 function recordTelemetry(event: RequestTelemetry) {
@@ -156,12 +169,14 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     const response = await fetch(`${baseURL}${path}`, {
       ...init,
       signal: controller.signal,
-      headers: { 'Content-Type': 'application/json', 'X-Request-ID': requestId, ...(init.headers ?? {}) },
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json', 'X-Request-ID': requestId, ...(csrfToken && init.method && init.method !== 'GET' ? { 'X-CSRF-Token': csrfToken } : {}), ...(init.headers ?? {}) },
     });
     responseRequestId = response.headers.get('x-request-id') ?? requestId;
     const body = await parseBody(response);
     if (!response.ok) {
       const error = body && typeof body === 'object' && 'error' in body ? (body as { error?: { code?: string; message?: string; details?: unknown } }).error : undefined;
+      if (response.status === 401 && !path.endsWith('/auth/login') && !path.endsWith('/auth/me')) authenticationFailureListener?.();
       throw new ApiError(error?.message ?? `Request failed with status ${response.status}.`, response.status, error?.code, response.headers.get('x-request-id') ?? requestId, error?.details);
     }
     if (staleKey && latestRequests.get(staleKey) !== sequence) {
@@ -190,6 +205,12 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 }
 
 export const api = {
+  authConfig: () => request<AuthConfig>('/api/v1/auth/config', { operation: 'auth-config' }),
+  me: async () => { const result = await request<AuthSession>('/api/v1/auth/me', { operation: 'auth-me' }); csrfToken = result.csrfToken; return result; },
+  register: async (email: string, password: string, displayName: string) => { const result = await request<AuthSession>('/api/v1/auth/register', { method: 'POST', body: JSON.stringify({ email, password, displayName }), operation: 'auth-register' }); csrfToken = result.csrfToken; return result; },
+  login: async (email: string, password: string) => { const result = await request<AuthSession>('/api/v1/auth/login', { method: 'POST', body: JSON.stringify({ email, password }), operation: 'auth-login' }); csrfToken = result.csrfToken; return result; },
+  logout: async () => { try { await request<{ loggedOut: boolean }>('/api/v1/auth/logout', { method: 'POST', operation: 'auth-logout' }); } finally { clearAuthenticationState(); } },
+  changePassword: async (currentPassword: string, newPassword: string) => { const result = await request<AuthSession>('/api/v1/auth/password', { method: 'POST', body: JSON.stringify({ currentPassword, newPassword }), operation: 'auth-password' }); csrfToken = result.csrfToken; return result; },
   seasons: (signal?: AbortSignal) => request<{ items: Season[] }>('/api/v1/seasons', { signal, operation: 'seasons', staleKey: 'seasons' }),
   players: (params: URLSearchParams, signal?: AbortSignal) => { const seasonId = Number(params.get('seasonId')); return request<{ items: PlayerResearchItem[]; teams: Team[]; total: number; page: number; pageSize: number; freshness: Freshness }>(`/api/v1/players?${params}`, { signal, operation: 'players', staleKey: `players:${params.toString()}`, expectedSeasonId: seasonId }); },
   player: (seasonId: number, id: number, signal?: AbortSignal) => request<{ player: Player; team: Team; history: { gameweek: number; totalPoints: number; minutes: number }[]; fixtures: Fixture[]; freshness: Freshness }>(`/api/v1/players/${id}?seasonId=${seasonId}`, { signal, operation: 'player', staleKey: `player:${seasonId}:${id}`, expectedSeasonId: seasonId }),
