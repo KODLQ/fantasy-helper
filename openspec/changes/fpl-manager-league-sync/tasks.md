@@ -50,7 +50,7 @@
 - [ ] 5.7 Add league-member pick synchronization with configurable member limits, selected-gameweek scope, and bounded concurrency.
 - [x] 5.8 Add team comparison read models and APIs for shared players, differentials, captain/bench/formation differences, and overlap metrics.
 - [ ] 5.9 Add actual/provisional/estimated point-difference calculations joined to public player-gameweek facts.
-- [ ] 5.10 Add frontend controls for league selection, gameweek selection, member subset selection, comparison, and omitted-member warnings.
+- [x] 5.10 Add frontend controls for league selection, gameweek selection, member subset selection, comparison, and omitted-member warnings.
 - [ ] 5.11 Add integration tests for multiple entries, multiple leagues, pagination resume, member-pick failures, public-data joins, import validation, no-overwrite behavior, and point-difference labeling.
 - [ ] 5.12 Document configuration, privacy/retention, session setup, comparison limits, estimate limitations, and the non-mutating scope of the feature.
 - [ ] 5.13 Add contract tests for missing scope, source conflicts, deterministic member selection, and provenance.

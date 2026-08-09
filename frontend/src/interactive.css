@@ -90,6 +90,16 @@
 .profile-close { position: absolute; z-index: 1; top: .65rem; right: .75rem; border: 0; background: transparent; color: var(--muted); font-size: 1.25rem; }
 .form-error { color: #ffb4a8; font-size: .8rem; }
 .protected-workspace { display: grid; gap: 1rem; align-items: start; padding: 2rem; border: 1px solid var(--line); border-radius: 16px; background: var(--panel); }
+.manager-workspace { display: grid; gap: 1rem; }
+.manager-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+.manager-grid .auth-panel { align-content: start; }
+.manager-grid button { justify-self: start; }
+.member-list { display: grid; gap: .45rem; max-height: 320px; overflow: auto; }
+.member-list label { display: flex; grid-template-columns: none; flex-direction: row; align-items: center; gap: .5rem; }
+.member-list input { width: auto; }
+.manager-result { display: grid; gap: .65rem; padding: 1rem; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
+.manager-result h3, .manager-result p { margin: 0; }
+@media (max-width: 900px) { .manager-grid { grid-template-columns: 1fr; } }
 
 .visually-hidden {
   position: absolute;

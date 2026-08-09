@@ -55,6 +55,12 @@ export type SyncStatus = { status: string; runId?: number; currentStage?: string
 export type AuthUser = { id: number; email: string; displayName: string; status: string; createdAt: string; updatedAt: string; lastLoginAt?: string };
 export type AuthSession = { user: AuthUser; csrfToken: string; expiresAt: string };
 export type AuthConfig = { registrationEnabled: boolean; emailProviderConfigured: boolean; minimumPasswordLength: number };
+export type ManagerScope = { id?: number; type: 'entry' | 'league'; sourceId: number; enabled: boolean; memberLimit: number };
+export type ManagerStatus = { status: string; runId?: number; completedWork: number; failedWork: number; warning?: string; freshness: Freshness };
+export type ManagerPick = { playerId: number; position: number; multiplier: number; captain: boolean; viceCaptain: boolean };
+export type ImportPreview = { snapshot: { snapshotId: number; entryId: number; gameweek: number; state: string; conflictState: string; picks: ManagerPick[] }; proposed: Squad; addedPlayerIds: number[]; removedPlayerIds: number[]; lineupChanged: boolean; captainChanged: boolean; validation: ValidationError[]; hasChanges: boolean };
+export type LeagueStandings = { leagueId: number; name: string; page: number; hasNext: boolean; members: { entryId: number; entryName: string; playerName: string; rank: number; lastRank: number; points: number }[] };
+export type LeagueComparison = { leagueId: number; seasonId: number; gameweek: number; selectedEntryIds: number[]; omittedEntryIds: number[]; comparisons: { entryId: number; sharedPlayers: number[]; differentials: number[]; overlap: number; netPoints: number; pointDifference: number; outcomeState: string }[]; outcomeState: string; algorithmVersion?: string; missingInputs: string[] };
 export type ValidationError = { code: string; rule: string; message: string; current?: unknown; required?: unknown; playerId?: number };
 export type Squad = { name: string; budget: number; players: Player[]; purchasePrices: Record<number, number>; startingPlayerIds: number[]; benchPlayerIds: number[]; captainId: number; viceCaptainId: number; formation: string; totalCost: number; remainingBudget: number; validation: ValidationError[] };
 export type RecommendationPlayer = { player: Player; score: number; factors: { name: string; signal: number; weight: number; contribution: number }[]; fixture: string; explanation: string };
@@ -221,6 +227,14 @@ export const api = {
   sync: () => request<SyncStatus>('/api/v1/sync', { method: 'POST', operation: 'sync' }),
   syncStatus: () => request<SyncStatus>('/api/v1/sync/status', { operation: 'sync-status', staleKey: 'sync-status' }),
   retrySync: (runId: number) => request<SyncStatus>(`/api/v1/sync/runs/${runId}/retry`, { method: 'POST', operation: 'sync-retry' }),
+  managerScopes: () => request<{ items: ManagerScope[] }>('/api/v1/manager/scopes', { operation: 'manager-scopes' }),
+  saveManagerScope: (scope: ManagerScope) => request<ManagerScope>('/api/v1/manager/scopes', { method: 'PUT', body: JSON.stringify(scope), operation: 'manager-scope-save' }),
+  connectManager: (entryId: number, session: string) => request<{ entryId: number; state: string; providerType: string }>('/api/v1/manager/connect', { method: 'POST', body: JSON.stringify({ entryId, session }), operation: 'manager-connect' }),
+  managerSync: (seasonId: number, gameweek: number) => request<ManagerStatus>('/api/v1/manager/sync', { method: 'POST', body: JSON.stringify({ seasonId, gameweek }), operation: 'manager-sync' }),
+  managerStatus: () => request<ManagerStatus>('/api/v1/manager/status', { operation: 'manager-status' }),
+  importPreview: (seasonId: number, gameweek: number, entryId: number) => request<ImportPreview>(`/api/v1/squad/import/preview?seasonId=${seasonId}&gameweek=${gameweek}&entryId=${entryId}`, { operation: 'import-preview' }),
+  leagueStandings: (seasonId: number, gameweek: number, leagueId: number, page = 1) => request<LeagueStandings>(`/api/v1/manager/leagues/${leagueId}/standings?seasonId=${seasonId}&gameweek=${gameweek}&page=${page}`, { operation: 'league-standings' }),
+  leagueComparison: (seasonId: number, gameweek: number, leagueId: number, entryIds: number[], limit: number) => request<LeagueComparison>(`/api/v1/manager/leagues/${leagueId}/comparison?seasonId=${seasonId}&gameweek=${gameweek}&entryIds=${entryIds.join(',')}&limit=${limit}`, { operation: 'league-comparison' }),
 };
 
 export const positionName = (position: number) => ({ 1: 'GK', 2: 'DEF', 3: 'MID', 4: 'FWD' }[position] ?? '—');
