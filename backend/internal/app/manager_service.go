@@ -211,3 +211,56 @@ func (s *ManagerService) Disconnect(ctx context.Context, userID int64, entryID i
 	}
 	return s.Repository.SetManagerConnectionState(ctx, userID, entryID, RemoteRevoked)
 }
+
+func (s *ManagerService) PreviewImport(ctx context.Context, userID int64, seasonID, entryID, gameweek int, domain *Store) (SquadImportPreview, bool, error) {
+	snapshot, found, err := s.Repository.LoadActiveTeam(ctx, userID, seasonID, entryID, gameweek)
+	if err != nil || !found {
+		return SquadImportPreview{}, found, err
+	}
+	current := domain.GetSquad()
+	preview, err := BuildImportPreview(snapshot, current, domain)
+	return preview, true, err
+}
+
+func (s *ManagerService) CompareLeague(ctx context.Context, userID int64, seasonID, leagueID, gameweek int, explicit []int, rankFrom, rankTo, limit int) (LeagueComparisonResult, error) {
+	members, err := s.Repository.LoadLeagueMembers(ctx, userID, seasonID, leagueID, gameweek)
+	if err != nil {
+		return LeagueComparisonResult{}, err
+	}
+	selected, omitted := SelectLeagueMembers(members, explicit, rankFrom, rankTo, limit)
+	result := LeagueComparisonResult{LeagueID: leagueID, SeasonID: seasonID, Gameweek: gameweek, SelectedIDs: selected, OmittedIDs: omitted}
+	if len(selected) < 2 {
+		result.MissingInputs = []string{"at-least-two-member-pick-snapshots"}
+		return result, nil
+	}
+	points, state, err := s.Repository.LoadPlayerGameweekPoints(ctx, seasonID, gameweek)
+	if err != nil {
+		return result, err
+	}
+	result.OutcomeState = state
+	if state == "estimated" {
+		result.AlgorithmVersion = "league-points-estimate-v1"
+	}
+	base, err := s.Repository.LoadManagerPicks(ctx, userID, seasonID, selected[0], gameweek)
+	if err != nil {
+		return result, err
+	}
+	if len(base) == 0 {
+		result.MissingInputs = append(result.MissingInputs, fmt.Sprintf("entry:%d:picks", selected[0]))
+	}
+	for _, entryID := range selected[1:] {
+		picks, pickErr := s.Repository.LoadManagerPicks(ctx, userID, seasonID, entryID, gameweek)
+		if pickErr != nil {
+			return result, pickErr
+		}
+		if len(picks) == 0 {
+			result.MissingInputs = append(result.MissingInputs, fmt.Sprintf("entry:%d:picks", entryID))
+			continue
+		}
+		left, right := CompareTeams(base, picks, points, 0, state)
+		left.EntryID = selected[0]
+		right.EntryID = entryID
+		result.Comparisons = append(result.Comparisons, left, right)
+	}
+	return result, nil
+}

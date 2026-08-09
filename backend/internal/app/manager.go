@@ -187,6 +187,45 @@ type LeagueStandings struct {
 	SnapshotID string         `json:"snapshotId"`
 }
 
+type ActiveTeamSnapshot struct {
+	SnapshotID      int64           `json:"snapshotId"`
+	EntryID         int             `json:"entryId"`
+	SeasonID        int             `json:"seasonId"`
+	Gameweek        int             `json:"gameweek"`
+	Bank            int             `json:"bank"`
+	TeamValue       int             `json:"teamValue"`
+	ActiveChip      string          `json:"activeChip,omitempty"`
+	Picks           []ManagerPick   `json:"picks"`
+	PurchasePrices  map[int]float64 `json:"purchasePrices"`
+	SourceFetchedAt time.Time       `json:"sourceFetchedAt"`
+	NormalizedAt    time.Time       `json:"normalizedAt"`
+	State           string          `json:"state"`
+	ConflictState   string          `json:"conflictState"`
+}
+
+type SquadImportPreview struct {
+	Snapshot         ActiveTeamSnapshot `json:"snapshot"`
+	Proposed         Squad              `json:"proposed"`
+	AddedPlayerIDs   []int              `json:"addedPlayerIds"`
+	RemovedPlayerIDs []int              `json:"removedPlayerIds"`
+	LineupChanged    bool               `json:"lineupChanged"`
+	CaptainChanged   bool               `json:"captainChanged"`
+	Validation       []ValidationError  `json:"validation"`
+	HasChanges       bool               `json:"hasChanges"`
+}
+
+type LeagueComparisonResult struct {
+	LeagueID         int              `json:"leagueId"`
+	SeasonID         int              `json:"seasonId"`
+	Gameweek         int              `json:"gameweek"`
+	SelectedIDs      []int            `json:"selectedEntryIds"`
+	OmittedIDs       []int            `json:"omittedEntryIds"`
+	Comparisons      []TeamComparison `json:"comparisons"`
+	OutcomeState     string           `json:"outcomeState"`
+	AlgorithmVersion string           `json:"algorithmVersion,omitempty"`
+	MissingInputs    []string         `json:"missingInputs"`
+}
+
 func SelectLeagueMembers(members []LeagueMember, explicit []int, rankFrom, rankTo, limit int) (selected, omitted []int) {
 	ordered := append([]LeagueMember(nil), members...)
 	sort.SliceStable(ordered, func(i, j int) bool {

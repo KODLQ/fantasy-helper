@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
+	"strings"
 )
 
 func (a *API) EnableManager(service *ManagerService) { a.Manager = service }
@@ -18,6 +20,170 @@ func (a *API) requireManager(w http.ResponseWriter, r *http.Request) (*ManagerSe
 		return nil, session, false
 	}
 	return a.Manager, session, true
+}
+
+func (a *API) managerEntryData(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeContractError(w, 405, requestIDFrom(w), "method_not_allowed", "Use GET for manager data.", false, nil)
+		return
+	}
+	service, session, ok := a.requireManager(w, r)
+	if !ok {
+		return
+	}
+	tail := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/manager/entries/"), "/")
+	parts := strings.Split(tail, "/")
+	entryID := 0
+	if len(parts) > 0 {
+		entryID, _ = strconv.Atoi(parts[0])
+	}
+	seasonID := parseInt(r.URL.Query().Get("seasonId"), 0)
+	if entryID <= 0 || seasonID <= 0 {
+		writeContractError(w, 422, requestIDFrom(w), "manager_scope_required", "entry and seasonId are required.", false, nil)
+		return
+	}
+	kind := "summary"
+	if len(parts) > 1 {
+		kind = parts[1]
+	}
+	scope := Scope{SeasonID: seasonID, Dataset: "manager-fpl"}
+	fresh := service.Status(session.User.ID).Freshness
+	switch kind {
+	case "summary":
+		item, found, err := service.Repository.LoadManagerSummary(r.Context(), session.User.ID, seasonID, entryID)
+		if err != nil {
+			writeContractError(w, 503, requestIDFrom(w), "manager_unavailable", "Manager summary is unavailable.", true, nil)
+			return
+		}
+		if !found {
+			writeContractError(w, 404, requestIDFrom(w), "manager_not_found", "Manager data was not found.", false, nil)
+			return
+		}
+		writeEnvelope(w, 200, requestIDFrom(w), scope, fresh, item)
+	case "history":
+		items, err := service.Repository.LoadManagerHistory(r.Context(), session.User.ID, seasonID, entryID)
+		if err != nil {
+			writeContractError(w, 503, requestIDFrom(w), "manager_unavailable", "Manager history is unavailable.", true, nil)
+			return
+		}
+		writeEnvelope(w, 200, requestIDFrom(w), scope, fresh, map[string]any{"items": items})
+	case "transfers":
+		items, err := service.Repository.LoadManagerTransfers(r.Context(), session.User.ID, seasonID, entryID)
+		if err != nil {
+			writeContractError(w, 503, requestIDFrom(w), "manager_unavailable", "Manager transfers are unavailable.", true, nil)
+			return
+		}
+		writeEnvelope(w, 200, requestIDFrom(w), scope, fresh, map[string]any{"items": items})
+	case "picks":
+		gameweek := parseInt(r.URL.Query().Get("gameweek"), 0)
+		if gameweek <= 0 {
+			writeContractError(w, 422, requestIDFrom(w), "manager_scope_required", "gameweek is required for picks.", false, nil)
+			return
+		}
+		scope.Gameweek = gameweek
+		items, err := service.Repository.LoadManagerPicks(r.Context(), session.User.ID, seasonID, entryID, gameweek)
+		if err != nil {
+			writeContractError(w, 503, requestIDFrom(w), "manager_unavailable", "Manager picks are unavailable.", true, nil)
+			return
+		}
+		writeEnvelope(w, 200, requestIDFrom(w), scope, fresh, map[string]any{"items": items})
+	default:
+		writeContractError(w, 404, requestIDFrom(w), "manager_route_not_found", "Manager dataset was not found.", false, nil)
+	}
+}
+
+func (a *API) managerLeagueData(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeContractError(w, 405, requestIDFrom(w), "method_not_allowed", "Use GET for league data.", false, nil)
+		return
+	}
+	service, session, ok := a.requireManager(w, r)
+	if !ok {
+		return
+	}
+	tail := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/manager/leagues/"), "/")
+	parts := strings.Split(tail, "/")
+	if len(parts) < 2 {
+		writeContractError(w, 422, requestIDFrom(w), "manager_scope_required", "league and dataset are required.", false, nil)
+		return
+	}
+	leagueID, _ := strconv.Atoi(parts[0])
+	seasonID := parseInt(r.URL.Query().Get("seasonId"), 0)
+	gameweek := parseInt(r.URL.Query().Get("gameweek"), 0)
+	if leagueID <= 0 || seasonID <= 0 || gameweek <= 0 {
+		writeContractError(w, 422, requestIDFrom(w), "manager_scope_required", "league, seasonId, and gameweek are required.", false, nil)
+		return
+	}
+	scope := Scope{SeasonID: seasonID, Gameweek: gameweek, Dataset: "manager-fpl"}
+	fresh := service.Status(session.User.ID).Freshness
+	if parts[1] == "standings" {
+		page := parseInt(r.URL.Query().Get("page"), 1)
+		item, found, err := service.Repository.LoadLeagueStandings(r.Context(), session.User.ID, seasonID, leagueID, gameweek, page)
+		if err != nil {
+			writeContractError(w, 503, requestIDFrom(w), "league_unavailable", "League standings are unavailable.", true, nil)
+			return
+		}
+		if !found {
+			writeContractError(w, 404, requestIDFrom(w), "league_not_found", "League standings were not found.", false, nil)
+			return
+		}
+		writeEnvelope(w, 200, requestIDFrom(w), scope, fresh, item)
+		return
+	}
+	if parts[1] == "comparison" {
+		ids := parseCSVInts(r.URL.Query().Get("entryIds"))
+		result, err := service.CompareLeague(r.Context(), session.User.ID, seasonID, leagueID, gameweek, ids, parseInt(r.URL.Query().Get("rankFrom"), 0), parseInt(r.URL.Query().Get("rankTo"), 0), parseInt(r.URL.Query().Get("limit"), 50))
+		if err != nil {
+			writeContractError(w, 503, requestIDFrom(w), "comparison_unavailable", "League comparison is unavailable.", true, nil)
+			return
+		}
+		writeEnvelopeWithWarnings(w, 200, requestIDFrom(w), scope, fresh, result.MissingInputs, result)
+		return
+	}
+	writeContractError(w, 404, requestIDFrom(w), "league_route_not_found", "League dataset was not found.", false, nil)
+}
+
+func (a *API) squadImportPreview(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeContractError(w, 405, requestIDFrom(w), "method_not_allowed", "Use GET for an import preview.", false, nil)
+		return
+	}
+	service, session, ok := a.requireManager(w, r)
+	if !ok {
+		return
+	}
+	seasonID := parseInt(r.URL.Query().Get("seasonId"), 0)
+	entryID := parseInt(r.URL.Query().Get("entryId"), 0)
+	gameweek := parseInt(r.URL.Query().Get("gameweek"), 0)
+	if seasonID <= 0 || entryID <= 0 || gameweek <= 0 {
+		writeContractError(w, 422, requestIDFrom(w), "manager_scope_required", "entryId, seasonId, and gameweek are required.", false, nil)
+		return
+	}
+	domain, err := a.requestDomainStoreForUser(r.Context(), seasonID, session.User.ID)
+	if err != nil {
+		writeContractError(w, 503, requestIDFrom(w), "planning_unavailable", "Planning data is unavailable.", true, nil)
+		return
+	}
+	preview, found, err := service.PreviewImport(r.Context(), session.User.ID, seasonID, entryID, gameweek, domain)
+	if err != nil {
+		writeContractError(w, 503, requestIDFrom(w), "import_preview_unavailable", "Import preview is unavailable.", true, nil)
+		return
+	}
+	if !found {
+		writeContractError(w, 404, requestIDFrom(w), "active_team_not_found", "No synchronized active team was found.", false, nil)
+		return
+	}
+	writeEnvelope(w, 200, requestIDFrom(w), Scope{SeasonID: seasonID, Gameweek: gameweek, Dataset: "manager-fpl"}, service.Status(session.User.ID).Freshness, preview)
+}
+
+func parseCSVInts(value string) []int {
+	items := []int{}
+	for _, part := range strings.Split(value, ",") {
+		if id, err := strconv.Atoi(strings.TrimSpace(part)); err == nil && id > 0 {
+			items = append(items, id)
+		}
+	}
+	return items
 }
 
 func (a *API) managerStatus(w http.ResponseWriter, r *http.Request) {

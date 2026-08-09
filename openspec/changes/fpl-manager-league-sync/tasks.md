@@ -40,15 +40,15 @@
 
 ## 5. Analysis APIs and verification
 
-- [ ] 5.1 Add manager history, picks, transfer, and league standings read APIs with freshness metadata.
+- [x] 5.1 Add manager history, picks, transfer, and league standings read APIs with freshness metadata.
 - [ ] 5.2 Add decision-analysis joins for points, captain multiplier, bench points, transfer cost, and chips.
 - [x] 5.3 Add manager and league sync status/error reporting separate from public sync status.
-- [ ] 5.3a Add scoped manager endpoints, pagination, validation errors, and common freshness envelopes.
-- [ ] 5.4 Add active-team preview and imported-snapshot APIs.
+- [x] 5.3a Add scoped manager endpoints, pagination, validation errors, and common freshness envelopes.
+- [x] 5.4 Add active-team preview and imported-snapshot APIs.
 - [ ] 5.5 Add explicit import-as-draft and replace-planning-squad actions with atomic validation and source provenance.
 - [ ] 5.6 Add frontend controls for connect, sync, preview, import, and replace confirmation states.
 - [ ] 5.7 Add league-member pick synchronization with configurable member limits, selected-gameweek scope, and bounded concurrency.
-- [ ] 5.8 Add team comparison read models and APIs for shared players, differentials, captain/bench/formation differences, and overlap metrics.
+- [x] 5.8 Add team comparison read models and APIs for shared players, differentials, captain/bench/formation differences, and overlap metrics.
 - [ ] 5.9 Add actual/provisional/estimated point-difference calculations joined to public player-gameweek facts.
 - [ ] 5.10 Add frontend controls for league selection, gameweek selection, member subset selection, comparison, and omitted-member warnings.
 - [ ] 5.11 Add integration tests for multiple entries, multiple leagues, pagination resume, member-pick failures, public-data joins, import validation, no-overwrite behavior, and point-difference labeling.

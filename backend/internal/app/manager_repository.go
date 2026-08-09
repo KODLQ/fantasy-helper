@@ -25,6 +25,14 @@ type ManagerDataRepository interface {
 	PersistLeaguePage(context.Context, int64, int, int, int, int, sourceLeagueStandings, string, time.Time) error
 	ExportManagerData(context.Context, int64) (map[string]any, error)
 	DeleteManagerData(context.Context, int64) error
+	LoadManagerHistory(context.Context, int64, int, int) ([]ManagerGameweek, error)
+	LoadManagerSummary(context.Context, int64, int, int) (ManagerEntry, bool, error)
+	LoadManagerPicks(context.Context, int64, int, int, int) ([]ManagerPick, error)
+	LoadManagerTransfers(context.Context, int64, int, int) ([]ManagerTransfer, error)
+	LoadLeagueStandings(context.Context, int64, int, int, int, int) (LeagueStandings, bool, error)
+	LoadActiveTeam(context.Context, int64, int, int, int) (ActiveTeamSnapshot, bool, error)
+	LoadLeagueMembers(context.Context, int64, int, int, int) ([]LeagueMember, error)
+	LoadPlayerGameweekPoints(context.Context, int, int) (map[int]int, string, error)
 }
 
 type ManagerWorkItem struct {

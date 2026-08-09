@@ -134,4 +134,46 @@ func TestExpiredMemorySessionRequiresReauthentication(t *testing.T) {
 	}
 }
 
+func TestActiveTeamImportPreviewIsNonMutatingAndExplainsChanges(t *testing.T) {
+	domain := NewStore()
+	current := demoSquad()
+	current = domain.EnrichSquad(current)
+	domain.SaveSquad(current)
+	snapshot := ActiveTeamSnapshot{SnapshotID: 44, EntryID: 9, SeasonID: domain.ExportSnapshot().Season.ID, Gameweek: 1, TeamValue: 1000, PurchasePrices: map[int]float64{}}
+	starts := map[int]bool{}
+	for _, id := range current.StartingPlayerIDs {
+		starts[id] = true
+	}
+	for id, price := range current.PurchasePrices {
+		snapshot.PurchasePrices[id] = price
+		snapshot.Picks = append(snapshot.Picks, ManagerPick{PlayerID: id, Position: 1, Multiplier: map[bool]int{true: 1, false: 0}[starts[id]], Captain: id == current.CaptainID, ViceCaptain: id == current.ViceCaptainID})
+	}
+	preview, err := BuildImportPreview(snapshot, current, domain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preview.HasChanges || len(preview.Validation) > 0 {
+		t.Fatalf("unchanged preview=%#v", preview)
+	}
+	if domain.GetSquad().CaptainID != current.CaptainID {
+		t.Fatal("preview mutated planning squad")
+	}
+	for index := range snapshot.Picks {
+		snapshot.Picks[index].Captain = false
+	}
+	for index := range snapshot.Picks {
+		if snapshot.Picks[index].PlayerID != current.CaptainID && snapshot.Picks[index].Multiplier > 0 {
+			snapshot.Picks[index].Captain = true
+			break
+		}
+	}
+	preview, err = BuildImportPreview(snapshot, current, domain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !preview.HasChanges || !preview.CaptainChanged {
+		t.Fatalf("changed preview=%#v", preview)
+	}
+}
+
 func itoa(value int) string { b, _ := json.Marshal(value); return string(b) }
