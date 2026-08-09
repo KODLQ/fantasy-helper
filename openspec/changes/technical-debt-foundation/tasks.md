@@ -1,6 +1,6 @@
 ## 1. Frontend maintainability
 
-- [ ] 1.1 Split `App.tsx` into feature components and shared hooks without changing route behavior.
+- [x] 1.1 Split `App.tsx` into feature components and shared hooks without changing route behavior.
 - [x] 1.2 Add typed API errors, request IDs, timeouts, cancellation, safe response parsing, and stale-response protection.
 - [ ] 1.3 Surface drawer, compare, auth, manager, and analysis errors with common loading/empty/stale/partial states.
 - [x] 1.4 Add formatter, linter, type-check, dependency-pin, and standard verification scripts.
