@@ -29,13 +29,11 @@ func main() {
 		logger.Error("database schema unavailable", "error", err)
 		os.Exit(1)
 	}
-	store := app.NewStore()
+	store := app.NewWarehouseCache()
 	if snapshot, ok, err := repository.LoadSnapshot(context.Background()); err != nil {
 		logger.Error("load persisted snapshot failed", "error", err)
 	} else if ok {
 		store.ApplySnapshot(snapshot.Season, snapshot.Gameweeks, snapshot.Teams, snapshot.Players, snapshot.Fixtures, snapshot.Histories)
-	} else if err := repository.UpsertSnapshot(context.Background(), store.ExportSnapshot()); err != nil {
-		logger.Error("seed demo snapshot failed", "error", err)
 	}
 	if squad, ok, err := repository.LoadSquad(context.Background()); err != nil {
 		logger.Error("load persisted squad failed", "error", err)

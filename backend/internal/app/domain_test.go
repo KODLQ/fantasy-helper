@@ -89,3 +89,13 @@ func TestApplySnapshotRetainsLastKnownGoodHistoryForFailedPlayers(t *testing.T) 
 		t.Fatalf("successful history was not refreshed: %#v", store.History(9))
 	}
 }
+
+func TestWarehouseCacheStartsWithoutFixtureData(t *testing.T) {
+	cache := NewWarehouseCache()
+	if len(cache.AllPlayers()) != 0 || cache.ExportSnapshot().Season.ID != 0 {
+		t.Fatalf("production cache contains fixture data: %#v", cache.ExportSnapshot())
+	}
+	if len(NewStore().AllPlayers()) == 0 {
+		t.Fatal("unit-test store should retain deterministic fixture data")
+	}
+}

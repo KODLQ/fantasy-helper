@@ -245,11 +245,19 @@ func (a *API) syncRun(w http.ResponseWriter, r *http.Request) {
 		writeContractError(w, http.StatusNotImplemented, w.Header().Get("X-Request-ID"), "sync_retry_unavailable", "Sync retry is not available without PostgreSQL.", false, nil)
 		return
 	}
+	a.startMu.Lock()
+	defer a.startMu.Unlock()
+	if a.Store.SyncStatus().Status == "running" {
+		writeContractError(w, http.StatusConflict, w.Header().Get("X-Request-ID"), "sync_retry_failed", "Another sync is already running.", true, nil)
+		return
+	}
 	status, err := repository.RetrySyncRun(r.Context(), runID)
 	if err != nil {
 		writeContractError(w, http.StatusConflict, w.Header().Get("X-Request-ID"), "sync_retry_failed", "The sync run could not be retried.", true, nil)
 		return
 	}
+	a.Store.SetSyncStatus(status)
+	a.startSync(status.Scope, runID)
 	writeEnvelope(w, http.StatusAccepted, w.Header().Get("X-Request-ID"), status.Scope, status.Freshness, status)
 }
 func (a *API) dataSnapshots(w http.ResponseWriter, r *http.Request) {
@@ -885,7 +893,7 @@ func (a *API) requestDomainStore(ctx context.Context) (*Store, error) {
 	if !found {
 		return nil, fmt.Errorf("no persisted public snapshot is available")
 	}
-	domain := newEmptyStore()
+	domain := NewWarehouseCache()
 	domain.ApplySnapshot(snapshot.Season, snapshot.Gameweeks, snapshot.Teams, snapshot.Players, snapshot.Fixtures, snapshot.Histories)
 	if squad, found, err := a.Repository.LoadSquad(ctx); err != nil {
 		return nil, err
