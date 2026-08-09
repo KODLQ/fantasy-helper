@@ -50,6 +50,43 @@ export class StaleResponseError extends Error {
   }
 }
 
+export type RequestTelemetry = {
+  operation: string;
+  requestId: string;
+  durationMs: number;
+  outcome: 'success' | 'failure' | 'cancelled' | 'stale';
+  cancellationClass?: 'timeout' | 'caller';
+};
+
+export type RequestMetrics = {
+  requests: number;
+  succeeded: number;
+  failed: number;
+  cancelled: number;
+  stale: number;
+};
+
+let telemetryListener: ((event: RequestTelemetry) => void) | undefined;
+const requestMetrics: RequestMetrics = { requests: 0, succeeded: 0, failed: 0, cancelled: 0, stale: 0 };
+
+export function setRequestTelemetryListener(listener?: (event: RequestTelemetry) => void) {
+  telemetryListener = listener;
+}
+
+export function getRequestMetrics(): RequestMetrics {
+  return { ...requestMetrics };
+}
+
+function recordTelemetry(event: RequestTelemetry) {
+  requestMetrics.requests += 1;
+  if (event.outcome === 'success') requestMetrics.succeeded += 1;
+  if (event.outcome === 'failure') requestMetrics.failed += 1;
+  if (event.outcome === 'cancelled') requestMetrics.cancelled += 1;
+  if (event.outcome === 'stale') requestMetrics.stale += 1;
+  telemetryListener?.(event);
+  if (import.meta.env.DEV) console.debug('[fantasy-helper request]', event);
+}
+
 type RequestOptions = RequestInit & { timeoutMs?: number; operation?: string; staleKey?: string };
 type Envelope<T> = { data: T; meta?: RequestMeta };
 const baseURL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8080';
@@ -79,26 +116,41 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   const abortFromCaller = () => controller.abort(externalSignal?.reason);
   externalSignal?.addEventListener('abort', abortFromCaller, { once: true });
   const timeout = window.setTimeout(() => controller.abort(new DOMException('Request timed out.', 'TimeoutError')), timeoutMs);
-  const requestId = globalThis.crypto?.randomUUID?.() ?? `web-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const requestId: string = globalThis.crypto?.randomUUID?.() ?? `web-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const startedAt = performance.now();
+  let responseRequestId = requestId;
+  let outcome: RequestTelemetry['outcome'] = 'success';
+  let cancellationClass: RequestTelemetry['cancellationClass'];
   try {
     const response = await fetch(`${baseURL}${path}`, {
       ...init,
       signal: controller.signal,
       headers: { 'Content-Type': 'application/json', 'X-Request-ID': requestId, ...(init.headers ?? {}) },
     });
+    responseRequestId = response.headers.get('x-request-id') ?? requestId;
     const body = await parseBody(response);
     if (!response.ok) {
       const error = body && typeof body === 'object' && 'error' in body ? (body as { error?: { code?: string; message?: string; details?: unknown } }).error : undefined;
       throw new ApiError(error?.message ?? `Request failed with status ${response.status}.`, response.status, error?.code, response.headers.get('x-request-id') ?? requestId, error?.details);
     }
-    if (staleKey && latestRequests.get(staleKey) !== sequence) throw new StaleResponseError(operation);
+    if (staleKey && latestRequests.get(staleKey) !== sequence) {
+      outcome = 'stale';
+      throw new StaleResponseError(operation);
+    }
     return (isEnvelope<T>(body) ? body.data : body) as T;
   } catch (reason) {
-    if (reason instanceof DOMException && reason.name === 'AbortError') throw new ApiError('The request was cancelled or timed out.', 0, 'request_cancelled', requestId);
+    if (reason instanceof DOMException && (reason.name === 'AbortError' || reason.name === 'TimeoutError')) {
+      outcome = 'cancelled';
+      cancellationClass = reason.name === 'TimeoutError' ? 'timeout' : 'caller';
+      throw new ApiError('The request was cancelled or timed out.', 0, 'request_cancelled', requestId);
+    }
+    if (reason instanceof StaleResponseError) throw reason;
+    outcome = 'failure';
     throw reason;
   } finally {
     window.clearTimeout(timeout);
     externalSignal?.removeEventListener('abort', abortFromCaller);
+    recordTelemetry({ operation, requestId: responseRequestId, durationMs: Math.round(performance.now() - startedAt), outcome, cancellationClass });
   }
 }
 

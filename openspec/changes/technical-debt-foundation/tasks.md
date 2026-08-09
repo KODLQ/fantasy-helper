@@ -10,7 +10,7 @@
 - [x] 2.1 Protect PostgreSQL tests from truncating production-like or unrecognized databases.
 - [x] 2.2 Ignore generated frontend/Playwright reports and configure disposable test-output locations.
 - [x] 2.3 Add deployment smoke checks for frontend reachability, API health, and common response envelopes.
-- [ ] 2.4 Add redacted frontend request/analysis correlation logging and cancellation metrics.
+- [x] 2.4 Add redacted frontend request/analysis correlation logging and cancellation metrics.
 - [ ] 2.5 Run formatting, static checks, unit tests, integration tests, builds, contract tests, and headed Playwright tests.
 - [x] 2.6 Implement `scripts/validate-openspec-portfolio` for registry schema, unknown references, cycles, release order, ownership uniqueness, parent/child duplicate detection, formula/rules registry integrity, and strict OpenSpec validation.
 
