@@ -725,7 +725,7 @@ func (r *PostgresRepository) SearchPlayers(ctx context.Context, q PlayerQuery) (
 		size = 100
 	}
 	args = append(args, size, (page-1)*size)
-	query := fmt.Sprintf(`SELECT p.source_id, p.first_name, p.second_name, p.web_name, p.position, t.source_id, p.price, p.total_points, p.form, p.minutes, p.value, p.status, p.news, p.chance_of_playing_next_round, p.goals_scored, p.assists, p.clean_sheets, p.bonus, p.saves, p.expected_minutes, p.recent_returns, COUNT(*) OVER() FROM players p JOIN teams t ON t.id=p.team_id JOIN seasons s ON s.id=p.season_id WHERE %s ORDER BY %s %s, p.source_id LIMIT $%d OFFSET $%d`, strings.Join(where, " AND "), sortColumn, direction, len(args)-1, len(args))
+	query := fmt.Sprintf(`SELECT p.source_id, p.first_name, p.second_name, p.web_name, p.position, t.source_id, p.price, p.total_points, p.form, p.minutes, p.value, p.status, p.news, p.chance_of_playing_next_round, p.goals_scored, p.assists, p.clean_sheets, p.bonus, p.saves, p.expected_minutes, p.recent_returns, COUNT(*) OVER() FROM players p JOIN teams t ON t.id=p.team_id JOIN seasons s ON s.id=p.season_id WHERE %s ORDER BY %s %s, LOWER(p.web_name), p.source_id LIMIT $%d OFFSET $%d`, strings.Join(where, " AND "), sortColumn, direction, len(args)-1, len(args))
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("search players: %w", err)

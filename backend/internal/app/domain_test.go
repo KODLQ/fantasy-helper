@@ -73,6 +73,18 @@ func TestSearchSortsByFormDescending(t *testing.T) {
 	}
 }
 
+func TestSearchUsesStableNameAndIDTieBreakers(t *testing.T) {
+	store := &Store{players: map[int]Player{
+		3: {ID: 3, WebName: "Zulu", Form: 5},
+		2: {ID: 2, WebName: "Alpha", Form: 5},
+		1: {ID: 1, WebName: "Alpha", Form: 5},
+	}}
+	players, total := store.SearchPlayers(PlayerQuery{Sort: "form", Desc: true, PageSize: 100})
+	if total != 3 || len(players) != 3 || players[0].ID != 1 || players[1].ID != 2 || players[2].ID != 3 {
+		t.Fatalf("expected stable name and ID tie-breakers, got %#v", players)
+	}
+}
+
 func TestApplySnapshotRetainsLastKnownGoodHistoryForFailedPlayers(t *testing.T) {
 	store := NewStore()
 	before := store.History(8)
