@@ -223,6 +223,33 @@ func TestCredentialRateLimitUsesGenericFailure(t *testing.T) {
 	}
 }
 
+func TestConcurrentSessionChecksKeepOneSessionBoundCSRFToken(t *testing.T) {
+	service, _ := newTestAuth(t, true)
+	registered, err := service.Register(context.Background(), "tabs@example.com", "Correct-horse-battery-42", "Tabs", "127.0.0.1", "req-register")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := service.Authenticate(context.Background(), registered.Token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := service.Authenticate(context.Background(), registered.Token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err = service.RefreshCSRF(context.Background(), first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err = service.RefreshCSRF(context.Background(), second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.CSRFToken == "" || first.CSRFToken != second.CSRFToken || !service.VerifyCSRF(second.SessionID, first.CSRFToken, second.CSRFHash) {
+		t.Fatalf("session-bound CSRF tokens diverged: first=%q second=%q", first.CSRFToken, second.CSRFToken)
+	}
+}
+
 func TestAuthAPICookiesCSRFRateLimitsAndDisabledRegistration(t *testing.T) {
 	service, repository := newTestAuth(t, true)
 	api := NewAPI(NewStore(), nil, nil, nil)

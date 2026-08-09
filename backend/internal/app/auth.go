@@ -339,10 +339,11 @@ func (a *AuthService) Authenticate(ctx context.Context, token string) (AuthSessi
 }
 
 func (a *AuthService) RefreshCSRF(ctx context.Context, session AuthSessionResult) (AuthSessionResult, error) {
-	csrf, csrfHash, err := newToken()
-	if err != nil {
-		return AuthSessionResult{}, err
+	if session.Token == "" {
+		return AuthSessionResult{}, ErrSessionInvalid
 	}
+	csrf := deriveCSRF(session.Token)
+	csrfHash := hashToken(csrf)
 	now := a.Now()
 	idleExpiry := now.Add(a.Config.IdleTimeout)
 	if idleExpiry.After(session.ExpiresAt) {
@@ -410,10 +411,8 @@ func (a *AuthService) newSession(ctx context.Context, user User, metadata map[st
 	if err != nil {
 		return AuthSessionResult{}, err
 	}
-	csrf, csrfHash, err := newToken()
-	if err != nil {
-		return AuthSessionResult{}, err
-	}
+	csrf := deriveCSRF(token)
+	csrfHash := hashToken(csrf)
 	session, err := a.Repository.CreateSession(ctx, Session{UserID: user.ID, TokenHash: tokenHash, CSRFHash: csrfHash, CreatedAt: now, LastSeenAt: now, IdleExpiresAt: now.Add(a.Config.IdleTimeout), AbsoluteExpiresAt: now.Add(a.Config.AbsoluteTimeout), DeviceMetadata: metadata})
 	if err != nil {
 		return AuthSessionResult{}, err
@@ -442,6 +441,11 @@ func newToken() (string, string, error) {
 func hashToken(value string) string {
 	sum := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(sum[:])
+}
+
+func deriveCSRF(sessionToken string) string {
+	sum := sha256.Sum256([]byte("fantasy-helper:csrf:" + sessionToken))
+	return base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
 func userIDPointer(user User, found bool) *int64 {

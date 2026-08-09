@@ -1,11 +1,12 @@
 import { expect, Page, test } from '@playwright/test';
-import { testPassword } from './helpers';
+import { openProfileMenu, testPassword } from './helpers';
 
 const uniqueEmail = (label: string) => `${label}-${Date.now()}-${Math.random().toString(16).slice(2)}@example.test`;
 
 async function register(page: Page, email: string, password = testPassword) {
   await page.goto('/?season=1&gameweek=1');
-  const panel = page.getByTestId('auth-panel');
+  const profile = await openProfileMenu(page);
+  const panel = profile.getByTestId('auth-panel');
   await panel.getByRole('button', { name: 'Create a local account' }).click();
   await panel.getByLabel('Display name').fill('Authentication Test');
   await panel.getByLabel('Email').fill(email);
@@ -14,7 +15,7 @@ async function register(page: Page, email: string, password = testPassword) {
   await panel.getByRole('button', { name: 'Create account', exact: true }).click();
   const response = await responsePromise;
   const body = await response.json() as { data: { csrfToken: string } };
-  await expect(page.getByTestId('authenticated-user')).toContainText(email);
+  await expect(profile.getByTestId('authenticated-user')).toContainText(email);
   return body.data.csrfToken;
 }
 
@@ -23,8 +24,9 @@ test.describe('local authentication lifecycle', () => {
     const email = uniqueEmail('lifecycle');
     await register(page, email);
     await page.reload();
-    await expect(page.getByTestId('authenticated-user')).toContainText(email);
-    await page.getByTestId('authenticated-user').getByRole('button', { name: 'Sign out' }).click();
+    const profile = await openProfileMenu(page);
+    await expect(profile.getByTestId('authenticated-user')).toContainText(email);
+    await profile.getByTestId('authenticated-user').getByRole('button', { name: 'Sign out' }).click();
     await expect(page.getByTestId('auth-panel')).toBeVisible();
 
     await page.getByTestId('auth-panel').getByRole('button', { name: 'Create a local account' }).click();
@@ -65,19 +67,33 @@ test.describe('local authentication lifecycle', () => {
 
     const email = uniqueEmail('expiry');
     await register(page, email);
+    await page.getByRole('button', { name: 'Close profile menu' }).click();
     await page.route('**/api/v1/squad**', (route) => route.fulfill({ status: 401, contentType: 'application/json', body: JSON.stringify({ error: { code: 'authentication_required', message: 'Sign in to access this workspace.' }, meta: { requestId: 'expired' } }) }));
     await page.locator('nav').getByRole('button', { name: 'Research' }).click();
     await page.locator('nav').getByRole('button', { name: 'Squad planner' }).click();
     await expect(page.getByTestId('protected-workspace')).toBeVisible();
-    await expect(page.getByTestId('protected-workspace').getByTestId('auth-panel')).toContainText('session expired');
+    await expect(page.getByTestId('protected-workspace').getByTestId('auth-panel')).toHaveCount(0);
+    await page.getByTestId('protected-workspace').getByRole('button', { name: 'Open sign in' }).click();
+    await expect(page.getByTestId('profile-menu').getByTestId('auth-panel')).toContainText('session expired');
   });
 
   test('honors disabled registration configuration', async ({ page }) => {
     await page.route('**/api/v1/auth/config', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: { registrationEnabled: false, emailProviderConfigured: false, minimumPasswordLength: 12 }, meta: { requestId: 'config' } }) }));
     await page.route('**/api/v1/auth/me', (route) => route.fulfill({ status: 401, contentType: 'application/json', body: JSON.stringify({ error: { code: 'authentication_required', message: 'Sign in.' }, meta: { requestId: 'me' } }) }));
     await page.goto('/');
+    await openProfileMenu(page);
     await expect(page.getByTestId('auth-panel')).toContainText('Registration is disabled');
     await expect(page.getByRole('button', { name: 'Create a local account' })).toHaveCount(0);
+  });
+
+  test('opens authentication from the profile ring and not the sidebar', async ({ page }) => {
+    await page.goto('/?season=1&gameweek=1');
+    await expect(page.locator('.sidebar').getByTestId('auth-panel')).toHaveCount(0);
+    await expect(page.getByTestId('auth-panel')).toHaveCount(0);
+    const profile = await openProfileMenu(page);
+    await expect(profile.getByRole('heading', { name: 'Sign in' })).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(profile).toBeHidden();
   });
 
   test('isolates two private squads while sharing public warehouse reads', async ({ browser }) => {

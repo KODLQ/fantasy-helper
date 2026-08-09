@@ -18,6 +18,7 @@
 - [x] 3.2 Add Playwright tests for valid registration, duplicate email, invalid login, reload persistence, logout, expiry, password change, and protected-route denial.
 - [x] 3.3 Add Playwright isolation tests with two users proving currently persisted private squads cannot cross accounts while public data remains readable; require equivalent active-team, alert, and saved-analysis cases in the dependent changes that introduce those records.
 - [x] 3.4 Add API/integration tests for cookie attributes, login rotation, password-change rotation, revocation, rate limits, CSRF/origin checks, disabled registration, and common error envelopes.
+- [x] 3.5 Move sign-in and account management from the sidebar into an accessible top-right profile-ring popover, with protected-workspace actions opening the same panel.
 
 ## 4. Documentation and rollout
 

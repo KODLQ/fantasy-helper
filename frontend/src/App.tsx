@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api, SyncStatus } from './api';
 import { AuthPanel, useAuth } from './auth-context';
 import { DataState } from './components/data-state';
@@ -19,7 +19,7 @@ const demoStarting = [1, 4, 5, 6, 8, 9, 10, 11, 13, 14, 15];
 const demoBench = [2, 7, 12, 22];
 
 function App() {
-	const auth = useAuth();
+  const auth = useAuth();
   const seasonContext = useSeason();
   const { season, seasonId, gameweek } = seasonContext;
   const [view, setView] = useState<View>('research');
@@ -27,6 +27,7 @@ function App() {
   const [compareIDs, setCompareIDs] = useState<number[]>([]);
   const [selectedID, setSelectedID] = useState<number | null>(null);
   const [notice, setNotice] = useState('');
+  const [profileOpen, setProfileOpen] = useState(false);
 
   useEffect(() => { setCompareIDs([]); setSelectedID(null); }, [seasonId]);
 
@@ -42,26 +43,46 @@ function App() {
       <div className="brand"><div className="brand-mark">FH</div><div><strong>Fantasy Helper</strong><span>Research desk</span></div></div>
       <div className="side-label">Workspace</div>
       <nav>{([['research', 'Research', '⌕'], ['compare', `Compare${compareIDs.length ? ` · ${compareIDs.length}` : ''}`, '◫'], ['squad', 'Squad planner', '♙'], ['recommendations', 'Recommendations', '✦']] as [View, string, string][]).map(([key, label, icon]) => <button key={key} className={view === key ? 'nav-item active' : 'nav-item'} onClick={() => setView(key)}><span>{icon}</span>{label}</button>)}</nav>
-      <div className="sidebar-footer"><AuthPanel compact /><SyncControl onNotice={setNotice} onStatus={setFreshness} /></div>
+      <div className="sidebar-footer"><SyncControl onNotice={setNotice} onStatus={setFreshness} /></div>
     </aside>
     <main className="main-content">
-      <header className="topbar"><div><span className="eyebrow">FPL / {season?.name ?? 'select season'}</span><h1>{view === 'research' ? 'Player research' : view === 'compare' ? 'Compare players' : view === 'squad' ? 'Squad planner' : 'Recommendations'}</h1></div><div className="topbar-actions"><SeasonSelector /><div className="week-chip">{gameweek ? `GW ${gameweek}` : 'No gameweek'} <span>·</span> {season?.state === 'historical' ? 'historical' : 'decision window'}</div><div className="avatar">{auth.user ? (auth.user.displayName || auth.user.email).slice(0, 2).toUpperCase() : '—'}</div></div></header>
+      <header className="topbar"><div><span className="eyebrow">FPL / {season?.name ?? 'select season'}</span><h1>{view === 'research' ? 'Player research' : view === 'compare' ? 'Compare players' : view === 'squad' ? 'Squad planner' : 'Recommendations'}</h1></div><div className="topbar-actions"><SeasonSelector /><div className="week-chip">{gameweek ? `GW ${gameweek}` : 'No gameweek'} <span>·</span> {season?.state === 'historical' ? 'historical' : 'decision window'}</div><ProfileMenu open={profileOpen} onOpenChange={setProfileOpen} /></div></header>
       {freshnessState !== 'actual' && freshnessState !== 'fresh' && <div className="freshness-banner" data-testid="freshness-banner"><span className="banner-icon">!</span><div><strong>{freshnessTitle}</strong><span>{freshness.warning ?? freshness.freshness?.warning ?? 'Sync official data to replace the sample research snapshot with the latest FPL data.'}</span></div></div>}
       {notice && <div className="toast" onClick={() => setNotice('')}>{notice}<span>×</span></div>}
       {seasonContext.notice && <div className="scope-notice" role="status">{seasonContext.notice}</div>}
       {seasonContext.loading ? <DataState status="loading" message="Loading available FPL seasons…" /> : seasonContext.error ? <div className="empty-panel season-state" role="alert"><h3>Could not load seasons</h3><p>{seasonContext.error}</p><button className="primary-button" onClick={seasonContext.retry}>Try again</button></div> : seasonContext.unknownSeason ? <div className="empty-panel season-state" data-testid="season-not-found"><h3>Season {seasonContext.unknownSeason} is not available</h3><p>Choose one of the imported seasons. The requested URL was not silently redirected.</p>{seasonContext.seasons.map((item) => <button className="secondary-button" key={item.id} onClick={() => seasonContext.selectSeason(item.id)}>{item.name}</button>)}</div> : !seasonId ? <div className="empty-panel season-state"><h3>No season data available</h3><p>Sync the current official season or import a historical archive to begin.</p></div> : season?.missingInputs.includes('catalogue') ? <div className="empty-panel season-state" data-testid="season-data-unavailable" role="alert"><h3>{season.name} data is unavailable</h3><p>This season is known, but its queryable catalogue has not been imported. Choose another season or import its archive.</p></div> : <>
         {view === 'research' && <Research seasonId={seasonId} onSelect={setSelectedID} onCompare={addCompare} onSquad={loadDemoSquad} />}
         {view === 'compare' && <Compare seasonId={seasonId} ids={compareIDs} onRemove={removeCompare} onBack={() => setView('research')} />}
-        {view === 'squad' && (auth.user ? <SquadPlanner seasonId={seasonId} onRecommend={() => setView('recommendations')} onLoadDemo={loadDemoSquad} /> : <ProtectedWorkspace title="Sign in to plan your squad" />)}
-        {view === 'recommendations' && (auth.user ? <Recommendations seasonId={seasonId} /> : <ProtectedWorkspace title="Sign in to save private recommendations" />)}
+        {view === 'squad' && (auth.user ? <SquadPlanner seasonId={seasonId} onRecommend={() => setView('recommendations')} onLoadDemo={loadDemoSquad} /> : <ProtectedWorkspace title="Sign in to plan your squad" onSignIn={() => setProfileOpen(true)} />)}
+        {view === 'recommendations' && (auth.user ? <Recommendations seasonId={seasonId} /> : <ProtectedWorkspace title="Sign in to save private recommendations" onSignIn={() => setProfileOpen(true)} />)}
         {selectedID && <PlayerDrawer seasonId={seasonId} id={selectedID} onClose={() => setSelectedID(null)} onCompare={addCompare} onAddToSquad={() => { setSelectedID(null); setView('squad'); setNotice('Use the Squad planner to manage this player.'); }} />}
       </>}
     </main>
   </div>;
 }
 
-function ProtectedWorkspace({ title }: { title: string }) {
-  return <section className="protected-workspace" data-testid="protected-workspace"><div><span className="eyebrow accent">PRIVATE WORKSPACE</span><h2>{title}</h2><p>Public player and fixture research stays available without an account. Your squads and future manager imports are isolated by local user.</p></div><AuthPanel /></section>;
+function ProfileMenu({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+  const auth = useAuth();
+  const container = useRef<HTMLDivElement>(null);
+  const label = auth.user ? 'Open profile menu' : 'Sign in or create account';
+
+  useEffect(() => {
+    if (!open) return;
+    const closeOutside = (event: MouseEvent) => { if (!container.current?.contains(event.target as Node)) onOpenChange(false); };
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') onOpenChange(false); };
+    document.addEventListener('mousedown', closeOutside);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => { document.removeEventListener('mousedown', closeOutside); document.removeEventListener('keydown', closeOnEscape); };
+  }, [open, onOpenChange]);
+
+  return <div className="profile-menu" ref={container}>
+    <button className="avatar" aria-label={label} aria-haspopup="dialog" aria-expanded={open} onClick={() => onOpenChange(!open)}>{auth.user ? (auth.user.displayName || auth.user.email).slice(0, 2).toUpperCase() : '◯'}</button>
+    {open && <div className="profile-popover" role="dialog" aria-label="Profile and authentication" data-testid="profile-menu"><button className="profile-close" aria-label="Close profile menu" onClick={() => onOpenChange(false)}>×</button><AuthPanel /></div>}
+  </div>;
+}
+
+function ProtectedWorkspace({ title, onSignIn }: { title: string; onSignIn: () => void }) {
+  return <section className="protected-workspace" data-testid="protected-workspace"><div><span className="eyebrow accent">PRIVATE WORKSPACE</span><h2>{title}</h2><p>Public player and fixture research stays available without an account. Your squads and future manager imports are isolated by local user.</p><button className="primary-button" onClick={onSignIn}>Open sign in</button></div></section>;
 }
 
 function SeasonSelector() {
