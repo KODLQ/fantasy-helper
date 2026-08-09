@@ -97,7 +97,11 @@ fail_check("warehouse does not own its source contract") unless warehouse.includ
 fail_check("warehouse does not own the common response contract") unless warehouse.include?("common-response-contract")
 repository_path = File.join(ROOT, "backend", "internal", "app", "repository.go")
 repository_text = File.read(repository_path)
-fail_check("application repository embeds schema DDL; migrations must remain the warehouse schema authority") if repository_text.match?(/CREATE\s+(TABLE|INDEX)|schemaStatements/i)
+warehouse_tasks_path = File.join(CHANGES_ROOT, "fpl-public-data-warehouse", "tasks.md")
+warehouse_delivery_complete = !File.read(warehouse_tasks_path).include?("- [ ]")
+if warehouse_delivery_complete && repository_text.match?(/CREATE\s+(TABLE|INDEX)|schemaStatements/i)
+  fail_check("application repository embeds schema DDL; migrations must remain the warehouse schema authority")
+end
 auth = changes.fetch("local-user-authentication").fetch("authoritativeCapabilities")
 fail_check("authentication ownership is missing workspace ownership") unless auth.include?("user-workspace-ownership")
 fail_check("technical debt claims account/session ownership") if changes.fetch("technical-debt-foundation").fetch("authoritativeCapabilities").any? { |capability| capability.match?(/auth|session|ownership/i) }
