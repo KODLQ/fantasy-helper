@@ -21,13 +21,27 @@ export type Player = {
 };
 
 export type Freshness = { status: string; state?: string; lastSuccessfulSync?: string; warning?: string; warnings?: string[]; snapshotAt?: string };
+export type Gameweek = { id: number; name: string; finished: boolean; isCurrent: boolean };
+export type Season = {
+  id: number;
+  name: string;
+  state: 'current' | 'historical';
+  availableGameweeks: Gameweek[];
+  defaultGameweek?: number;
+  sourceKind: 'official-current' | 'retained-snapshot' | 'historical-archive';
+  lastImportedAt?: string;
+  freshness: Freshness;
+  completeness: Record<string, unknown>;
+  missingInputs: string[];
+  warnings: string[];
+};
 export type SyncStatus = { status: string; runId?: number; currentStage?: string; completedStages?: string[]; failedStages?: string[]; completedWork?: number; totalWork?: number; warning?: string; freshness: Freshness };
 export type ValidationError = { code: string; rule: string; message: string; current?: unknown; required?: unknown; playerId?: number };
 export type Squad = { name: string; budget: number; players: Player[]; purchasePrices: Record<number, number>; startingPlayerIds: number[]; benchPlayerIds: number[]; captainId: number; viceCaptainId: number; formation: string; totalCost: number; remainingBudget: number; validation: ValidationError[] };
 export type RecommendationPlayer = { player: Player; score: number; factors: { name: string; signal: number; weight: number; contribution: number }[]; fixture: string; explanation: string };
 export type Recommendation = { algorithmVersion: string; weights: Record<string, number>; startingXI: RecommendationPlayer[]; bench: RecommendationPlayer[]; captain: RecommendationPlayer; viceCaptain: RecommendationPlayer; heuristicNotice: string; snapshotAt: string };
 
-export type RequestMeta = { requestId?: string; freshness?: Freshness; [key: string]: unknown };
+export type RequestMeta = { requestId?: string; freshness?: Freshness; scope?: { seasonId?: number; gameweek?: number; dataset?: string }; warnings?: string[]; [key: string]: unknown };
 export class ApiError extends Error {
   readonly code: string;
   readonly status: number;
@@ -88,7 +102,7 @@ function recordTelemetry(event: RequestTelemetry) {
   if (import.meta.env.DEV) console.debug('[fantasy-helper request]', event);
 }
 
-type RequestOptions = RequestInit & { timeoutMs?: number; operation?: string; staleKey?: string };
+type RequestOptions = RequestInit & { timeoutMs?: number; operation?: string; staleKey?: string; expectedSeasonId?: number };
 type Envelope<T> = { data: T; meta?: RequestMeta };
 const baseURL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8080';
 const latestRequests = new Map<string, number>();
@@ -110,7 +124,7 @@ async function parseBody(response: Response): Promise<unknown> {
 }
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  const { timeoutMs = 15000, operation = path, staleKey, signal: externalSignal, ...init } = options;
+  const { timeoutMs = 15000, operation = path, staleKey, expectedSeasonId, signal: externalSignal, ...init } = options;
   const sequence = staleKey ? (latestRequests.get(staleKey) ?? 0) + 1 : 0;
   if (staleKey) latestRequests.set(staleKey, sequence);
   const controller = new AbortController();
@@ -138,6 +152,10 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
       outcome = 'stale';
       throw new StaleResponseError(operation);
     }
+    if (expectedSeasonId && isEnvelope<T>(body) && body.meta?.scope?.seasonId !== expectedSeasonId) {
+      outcome = 'stale';
+      throw new StaleResponseError(operation);
+    }
     return (isEnvelope<T>(body) ? body.data : body) as T;
   } catch (reason) {
     if (reason instanceof DOMException && (reason.name === 'AbortError' || reason.name === 'TimeoutError')) {
@@ -156,12 +174,13 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 }
 
 export const api = {
-  players: (params: URLSearchParams, signal?: AbortSignal) => request<{ items: Player[]; total: number; page: number; pageSize: number; freshness: Freshness }>(`/api/v1/players?${params}`, { signal, operation: 'players', staleKey: `players:${params.toString()}` }),
-  player: (id: number, signal?: AbortSignal) => request<{ player: Player; team: { name: string; shortName: string }; history: { gameweek: number; totalPoints: number; minutes: number }[]; fixtures: { homeTeam: number; awayTeam: number; homeDifficulty: number; awayDifficulty: number }[]; freshness: Freshness }>(`/api/v1/players/${id}`, { signal, operation: 'player', staleKey: `player:${id}` }),
-  compare: (ids: number[], signal?: AbortSignal) => request<{ items: { player: Player; team: { shortName: string }; history: unknown[] }[]; freshness: Freshness }>(`/api/v1/players/compare?ids=${ids.join(',')}`, { signal, operation: 'compare', staleKey: 'compare' }),
-  squad: (signal?: AbortSignal) => request<Squad>('/api/v1/squad', { signal, operation: 'squad' }),
-  saveSquad: (squad: Partial<Squad>) => request<Squad>('/api/v1/squad', { method: 'PUT', body: JSON.stringify(squad), operation: 'save-squad' }),
-  recommend: (weights?: Record<string, number>) => request<{ recommendation: Recommendation; freshness: Freshness }>('/api/v1/recommendations', { method: 'POST', body: JSON.stringify({ weights }), operation: 'recommendation' }),
+  seasons: (signal?: AbortSignal) => request<{ items: Season[] }>('/api/v1/seasons', { signal, operation: 'seasons', staleKey: 'seasons' }),
+  players: (params: URLSearchParams, signal?: AbortSignal) => { const seasonId = Number(params.get('seasonId')); return request<{ items: Player[]; total: number; page: number; pageSize: number; freshness: Freshness }>(`/api/v1/players?${params}`, { signal, operation: 'players', staleKey: `players:${params.toString()}`, expectedSeasonId: seasonId }); },
+  player: (seasonId: number, id: number, signal?: AbortSignal) => request<{ player: Player; team: { name: string; shortName: string }; history: { gameweek: number; totalPoints: number; minutes: number }[]; fixtures: { homeTeam: number; awayTeam: number; homeDifficulty: number; awayDifficulty: number }[]; freshness: Freshness }>(`/api/v1/players/${id}?seasonId=${seasonId}`, { signal, operation: 'player', staleKey: `player:${seasonId}:${id}`, expectedSeasonId: seasonId }),
+  compare: (seasonId: number, ids: number[], signal?: AbortSignal) => request<{ items: { player: Player; team: { shortName: string }; history: unknown[] }[]; freshness: Freshness }>(`/api/v1/players/compare?ids=${ids.join(',')}&seasonId=${seasonId}`, { signal, operation: 'compare', staleKey: `compare:${seasonId}`, expectedSeasonId: seasonId }),
+  squad: (seasonId: number, signal?: AbortSignal) => request<Squad>(`/api/v1/squad?seasonId=${seasonId}`, { signal, operation: 'squad', staleKey: `squad:${seasonId}`, expectedSeasonId: seasonId }),
+  saveSquad: (seasonId: number, squad: Partial<Squad>) => request<Squad>(`/api/v1/squad?seasonId=${seasonId}`, { method: 'PUT', body: JSON.stringify(squad), operation: 'save-squad', expectedSeasonId: seasonId }),
+  recommend: (seasonId: number, weights?: Record<string, number>, signal?: AbortSignal) => request<{ recommendation: Recommendation; freshness: Freshness }>(`/api/v1/recommendations?seasonId=${seasonId}`, { method: 'POST', body: JSON.stringify({ weights }), signal, operation: 'recommendation', staleKey: `recommendation:${seasonId}`, expectedSeasonId: seasonId }),
   sync: () => request<SyncStatus>('/api/v1/sync', { method: 'POST', operation: 'sync' }),
   syncStatus: () => request<SyncStatus>('/api/v1/sync/status', { operation: 'sync-status', staleKey: 'sync-status' }),
   retrySync: (runId: number) => request<SyncStatus>(`/api/v1/sync/runs/${runId}/retry`, { method: 'POST', operation: 'sync-retry' }),

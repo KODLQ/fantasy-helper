@@ -44,6 +44,15 @@ func main() {
 	source.SeasonID = cfg.SourceSeasonID
 	source.SeasonName = cfg.SourceSeasonName
 	source.AllowDiscovery = cfg.SourceDiscovery
+	if len(cfg.SourceProfiles) > 0 {
+		for _, profile := range cfg.SourceProfiles {
+			if profile.Kind == app.SourceOfficialCurrent {
+				source.Kind = profile.Kind
+				source.BaseURL = profile.BaseLocation
+				break
+			}
+		}
+	}
 	source.Client.Timeout = cfg.SourceTimeout
 	source.Retries = cfg.SourceRetries
 	source.RetryJitter = cfg.SourceRetryJitter

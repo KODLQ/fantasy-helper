@@ -8,8 +8,8 @@ test.describe('player research', () => {
     await expect(page.getByTestId('player-table')).toBeVisible();
 
     await page.getByPlaceholder('Search by player or club...').fill('Mason');
-    await page.locator('select').nth(0).selectOption('3');
-    await page.locator('select').nth(1).selectOption('points');
+    await page.locator('.filter-bar select').nth(0).selectOption('3');
+    await page.locator('.filter-bar select').nth(1).selectOption('points');
 
     await expect(page.getByRole('button', { name: /Mason/ }).first()).toBeVisible();
     await page.getByRole('button', { name: /Mason/ }).first().click();
@@ -20,4 +20,3 @@ test.describe('player research', () => {
     await expect(drawer).toContainText('Next fixture');
   });
 });
-

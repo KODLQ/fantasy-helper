@@ -3,4 +3,5 @@ created: 2026-08-08
 dependsOn:
   - fpl-research-assistant-foundation
   - fpl-public-data-warehouse
+  - fpl-multi-season-navigation
   - local-user-authentication

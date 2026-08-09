@@ -1,6 +1,7 @@
 package app
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -40,5 +41,31 @@ func TestLoadConfigSourceTransportPolicy(t *testing.T) {
 	t.Setenv("SYNC_LIVE_CADENCE", "-1m")
 	if _, err := LoadConfig(); err == nil {
 		t.Fatal("expected negative scheduler cadence to be rejected")
+	}
+}
+
+func TestLoadConfigValidatesSourceProfiles(t *testing.T) {
+	t.Setenv("FPL_SOURCE_SEASON_ID", "")
+	t.Setenv("FPL_SOURCE_SEASON_NAME", "")
+	t.Setenv("FPL_SOURCE_PROFILES_JSON", `[{"seasonId":2026,"seasonName":"2026/27","kind":"official-current","baseLocation":"https://fantasy.premierleague.com/api","supportedDatasets":["catalogue"],"allowLiveRefresh":true}]`)
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SourceSeasonID != 2026 || cfg.SourceSeasonName != "2026/27" || len(cfg.SourceProfiles) != 1 {
+		t.Fatalf("unexpected source profile config: %#v", cfg)
+	}
+
+	for name, value := range map[string]string{
+		"missing official profile": `[{"seasonId":2025,"seasonName":"2025/26","kind":"historical-archive","baseLocation":"/archive","allowLiveRefresh":false}]`,
+		"duplicate season":         `[{"seasonId":2026,"seasonName":"2026/27","kind":"official-current","allowLiveRefresh":true},{"seasonId":2026,"seasonName":"duplicate","kind":"retained-snapshot","allowLiveRefresh":false}]`,
+		"historical live":          `[{"seasonId":2026,"seasonName":"2026/27","kind":"official-current","allowLiveRefresh":true},{"seasonId":2025,"seasonName":"2025/26","kind":"historical-archive","allowLiveRefresh":true}]`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("FPL_SOURCE_PROFILES_JSON", value)
+			if _, err := LoadConfig(); err == nil || strings.TrimSpace(err.Error()) == "" {
+				t.Fatal("expected invalid source profile configuration to fail")
+			}
+		})
 	}
 }

@@ -1,7 +1,7 @@
 import { expect, Page } from '@playwright/test';
 
 export async function openApp(page: Page) {
-  await page.goto('/');
+  await page.goto('/?season=1&gameweek=1');
   await expect(page.getByTestId('app-shell')).toBeVisible();
 }
 

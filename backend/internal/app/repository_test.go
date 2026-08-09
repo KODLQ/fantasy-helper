@@ -94,7 +94,7 @@ func TestPostgresRepositoryPersistence(t *testing.T) {
 	if err := repository.UpsertFixtureStats(ctx, snapshot.Season.ID, observedAt, []SourceFixture{{ID: fixture.ID, Stats: []SourceFixtureStat{{Identifier: "goals_scored", Home: []SourceStatValue{{Element: player.ID, Value: 1}}}}}}); err != nil {
 		t.Fatal(err)
 	}
-	livePlayers := []LivePlayerStats{{PlayerID: player.ID, Minutes: 90, Points: 9, Goals: 1, ExpectedGoals: "0.75"}}
+	livePlayers := []LivePlayerStats{{PlayerID: player.ID, Minutes: 90, Points: 9, Goals: 1, ExpectedGoals: sourceDecimal("0.75")}}
 	if unchanged, err := repository.LiveGameweekFactsUnchanged(ctx, snapshot.Season.ID, 1, livePlayers); err != nil || unchanged {
 		t.Fatalf("first live observation should not be stable: unchanged=%v err=%v", unchanged, err)
 	}
@@ -141,7 +141,7 @@ func TestPostgresRepositoryPersistence(t *testing.T) {
 	if err != nil || len(players) != 3 || total != len(snapshot.Players) {
 		t.Fatalf("unexpected PostgreSQL research result: count=%d total=%d err=%v", len(players), total, err)
 	}
-	detail, found, err := repository.LoadPlayerDetail(ctx, players[0].ID)
+	detail, found, err := repository.LoadPlayerDetail(ctx, snapshot.Season.ID, players[0].ID)
 	if err != nil || !found || detail.Player.ID != players[0].ID || detail.Team.ShortName == "" {
 		t.Fatalf("unexpected PostgreSQL player detail: %#v found=%v err=%v", detail, found, err)
 	}
@@ -163,6 +163,63 @@ func TestPostgresRepositoryPersistence(t *testing.T) {
 	}
 	if len(loadedSquad.PurchasePrices) != 15 || loadedSquad.Formation != squad.Formation || loadedSquad.CaptainID != squad.CaptainID {
 		t.Fatalf("unexpected loaded squad: %#v", loadedSquad)
+	}
+
+	historical := snapshot
+	historical.Season = Season{ID: 2024, Name: "2024/25", SourceKind: SourceHistoricalArchive}
+	historical.Players = append([]Player(nil), snapshot.Players...)
+	historical.Players[0].WebName = "Historical Stone"
+	for index := range historical.Gameweeks {
+		historical.Gameweeks[index].IsCurrent = false
+		historical.Gameweeks[index].Finished = true
+	}
+	if err := repository.UpsertSnapshot(ctx, historical); err != nil {
+		t.Fatal(err)
+	}
+	seasons, err := repository.ListSeasons(ctx)
+	if err != nil || len(seasons) != 2 || seasons[0].ID != 2024 || seasons[0].State != SeasonHistorical {
+		t.Fatalf("unexpected multi-season catalogue: %#v err=%v", seasons, err)
+	}
+	historicalPlayers, historicalTotal, err := repository.SearchPlayers(ctx, PlayerQuery{SeasonID: 2024, Page: 1, PageSize: 100})
+	historicalName := ""
+	for _, candidate := range historicalPlayers {
+		if candidate.ID == snapshot.Players[0].ID {
+			historicalName = candidate.WebName
+		}
+	}
+	if err != nil || historicalTotal != len(snapshot.Players) || historicalName != "Historical Stone" {
+		t.Fatalf("historical search leaked scope: %#v total=%d err=%v", historicalPlayers, historicalTotal, err)
+	}
+	currentDetail, found, err := repository.LoadPlayerDetail(ctx, snapshot.Season.ID, snapshot.Players[0].ID)
+	if err != nil || !found || currentDetail.Player.WebName == "Historical Stone" {
+		t.Fatalf("current detail leaked historical identity: %#v found=%v err=%v", currentDetail, found, err)
+	}
+	historicalDetail, found, err := repository.LoadPlayerDetail(ctx, 2024, snapshot.Players[0].ID)
+	if err != nil || !found || historicalDetail.Player.WebName != "Historical Stone" {
+		t.Fatalf("historical detail not isolated: %#v found=%v err=%v", historicalDetail, found, err)
+	}
+	if err := repository.SaveSquadForSeason(ctx, 2024, squad); err != nil {
+		t.Fatal(err)
+	}
+	historicalSquad, found, err := repository.LoadSquadForSeason(ctx, 2024)
+	if err != nil || !found || len(historicalSquad.PurchasePrices) != len(squad.PurchasePrices) {
+		t.Fatalf("historical squad not scoped: %#v found=%v err=%v", historicalSquad, found, err)
+	}
+	var currentSeasonID int
+	if err := database.QueryRowContext(ctx, `SELECT source_id FROM seasons WHERE is_current`).Scan(&currentSeasonID); err != nil || currentSeasonID != snapshot.Season.ID {
+		t.Fatalf("historical import changed current season: id=%d err=%v", currentSeasonID, err)
+	}
+	rollover := snapshot
+	rollover.Season = Season{ID: 2026, Name: "2026/27", IsCurrent: true, SourceKind: SourceOfficialCurrent}
+	if err := repository.UpsertSnapshot(ctx, rollover); err != nil {
+		t.Fatal(err)
+	}
+	var previousKind SourceKind
+	if err := database.QueryRowContext(ctx, `SELECT source_kind FROM seasons WHERE source_id=$1`, snapshot.Season.ID).Scan(&previousKind); err != nil || previousKind != SourceRetainedSnapshot {
+		t.Fatalf("rollover did not retain historical provenance: kind=%q err=%v", previousKind, err)
+	}
+	if _, err := database.ExecContext(ctx, `INSERT INTO seasons (source_id, name, is_current) VALUES (2027, 'invalid second current', TRUE)`); err == nil {
+		t.Fatal("expected one-current-season database invariant to reject a second current season")
 	}
 
 	status := SyncStatus{Status: "partial", StartedAt: time.Now().Add(-time.Minute), FinishedAt: time.Now(), CompletedStages: []string{"snapshot"}, FailedStages: []string{"player-history:8"}, Warning: "one history batch failed", Checksum: "sync-checksum"}

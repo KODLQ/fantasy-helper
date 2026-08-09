@@ -20,6 +20,7 @@ type FPLSource struct {
 	Retries        int
 	SeasonID       int
 	SeasonName     string
+	Kind           SourceKind
 	AllowDiscovery bool
 	OnObservation  func(SourceObservation)
 	RetryJitter    time.Duration
@@ -131,53 +132,53 @@ type sourceTeam struct {
 }
 type SourceTeam = sourceTeam
 type sourceElement struct {
-	ID                   int    `json:"id"`
-	Code                 int    `json:"code"`
-	FirstName            string `json:"first_name"`
-	SecondName           string `json:"second_name"`
-	WebName              string `json:"web_name"`
-	ElementType          int    `json:"element_type"`
-	Team                 int    `json:"team"`
-	NowCost              int    `json:"now_cost"`
-	TotalPoints          int    `json:"total_points"`
-	Form                 string `json:"form"`
-	Minutes              int    `json:"minutes"`
-	ValueForm            string `json:"value_form"`
-	Status               string `json:"status"`
-	News                 string `json:"news"`
-	Chance               *int   `json:"chance_of_playing_next_round"`
-	Goals                int    `json:"goals_scored"`
-	Assists              int    `json:"assists"`
-	CleanSheets          int    `json:"clean_sheets"`
-	Bonus                int    `json:"bonus"`
-	Saves                int    `json:"saves"`
-	SelectedByPercent    string `json:"selected_by_percent"`
-	YellowCards          int    `json:"yellow_cards"`
-	RedCards             int    `json:"red_cards"`
-	OwnGoals             int    `json:"own_goals"`
-	PenaltiesSaved       int    `json:"penalties_saved"`
-	PenaltiesMissed      int    `json:"penalties_missed"`
-	ExpectedGoals        string `json:"expected_goals"`
-	ExpectedAssists      string `json:"expected_assists"`
-	ExpectedGoalsPer90   string `json:"expected_goal_per_90"`
-	ExpectedAssistsPer90 string `json:"expected_assists_per_90"`
-	Influence            string `json:"influence"`
-	Creativity           string `json:"creativity"`
-	Threat               string `json:"threat"`
-	ICTIndex             string `json:"ict_index"`
-	PointsPerGame        string `json:"points_per_game"`
-	EpThis               string `json:"ep_this"`
-	EpNext               string `json:"ep_next"`
-	ValueSeason          string `json:"value_season"`
-	CostChangeStart      int    `json:"cost_change_start"`
-	CostChangeEvent      int    `json:"cost_change_event"`
-	TransfersIn          int    `json:"transfers_in"`
-	TransfersOut         int    `json:"transfers_out"`
-	TransfersInEvent     int    `json:"transfers_in_event"`
-	TransfersOutEvent    int    `json:"transfers_out_event"`
-	Starts               int    `json:"starts"`
-	DreamteamCount       int    `json:"dreamteam_count"`
-	InDreamteam          bool   `json:"in_dreamteam"`
+	ID                   int           `json:"id"`
+	Code                 int           `json:"code"`
+	FirstName            string        `json:"first_name"`
+	SecondName           string        `json:"second_name"`
+	WebName              string        `json:"web_name"`
+	ElementType          int           `json:"element_type"`
+	Team                 int           `json:"team"`
+	NowCost              int           `json:"now_cost"`
+	TotalPoints          int           `json:"total_points"`
+	Form                 sourceDecimal `json:"form"`
+	Minutes              int           `json:"minutes"`
+	ValueForm            sourceDecimal `json:"value_form"`
+	Status               string        `json:"status"`
+	News                 string        `json:"news"`
+	Chance               *int          `json:"chance_of_playing_next_round"`
+	Goals                int           `json:"goals_scored"`
+	Assists              int           `json:"assists"`
+	CleanSheets          int           `json:"clean_sheets"`
+	Bonus                int           `json:"bonus"`
+	Saves                int           `json:"saves"`
+	SelectedByPercent    sourceDecimal `json:"selected_by_percent"`
+	YellowCards          int           `json:"yellow_cards"`
+	RedCards             int           `json:"red_cards"`
+	OwnGoals             int           `json:"own_goals"`
+	PenaltiesSaved       int           `json:"penalties_saved"`
+	PenaltiesMissed      int           `json:"penalties_missed"`
+	ExpectedGoals        sourceDecimal `json:"expected_goals"`
+	ExpectedAssists      sourceDecimal `json:"expected_assists"`
+	ExpectedGoalsPer90   sourceDecimal `json:"expected_goal_per_90"`
+	ExpectedAssistsPer90 sourceDecimal `json:"expected_assists_per_90"`
+	Influence            sourceDecimal `json:"influence"`
+	Creativity           sourceDecimal `json:"creativity"`
+	Threat               sourceDecimal `json:"threat"`
+	ICTIndex             sourceDecimal `json:"ict_index"`
+	PointsPerGame        sourceDecimal `json:"points_per_game"`
+	EpThis               sourceDecimal `json:"ep_this"`
+	EpNext               sourceDecimal `json:"ep_next"`
+	ValueSeason          sourceDecimal `json:"value_season"`
+	CostChangeStart      int           `json:"cost_change_start"`
+	CostChangeEvent      int           `json:"cost_change_event"`
+	TransfersIn          int           `json:"transfers_in"`
+	TransfersOut         int           `json:"transfers_out"`
+	TransfersInEvent     int           `json:"transfers_in_event"`
+	TransfersOutEvent    int           `json:"transfers_out_event"`
+	Starts               int           `json:"starts"`
+	DreamteamCount       int           `json:"dreamteam_count"`
+	InDreamteam          bool          `json:"in_dreamteam"`
 }
 type SourceElement = sourceElement
 type sourceFixture struct {
@@ -229,33 +230,57 @@ type sourceHistory struct {
 type SourceHistory = sourceHistory
 
 type LivePlayerStats struct {
-	PlayerID         int    `json:"element"`
-	Minutes          int    `json:"minutes"`
-	Points           int    `json:"total_points"`
-	Goals            int    `json:"goals_scored"`
-	Assists          int    `json:"assists"`
-	CleanSheets      int    `json:"clean_sheets"`
-	GoalsConceded    int    `json:"goals_conceded"`
-	Bonus            int    `json:"bonus"`
-	BPS              int    `json:"bps"`
-	Saves            int    `json:"saves"`
-	YellowCards      int    `json:"yellow_cards"`
-	RedCards         int    `json:"red_cards"`
-	OwnGoals         int    `json:"own_goals"`
-	PenaltiesSaved   int    `json:"penalties_saved"`
-	PenaltiesMissed  int    `json:"penalties_missed"`
-	TransfersBalance int    `json:"transfers_balance"`
-	Selected         int    `json:"selected"`
-	TransfersIn      int    `json:"transfers_in"`
-	TransfersOut     int    `json:"transfers_out"`
-	InDreamteam      bool   `json:"in_dreamteam"`
-	Influence        string `json:"influence"`
-	Creativity       string `json:"creativity"`
-	Threat           string `json:"threat"`
-	ICTIndex         string `json:"ict_index"`
-	ExpectedGoals    string `json:"expected_goals"`
-	ExpectedAssists  string `json:"expected_assists"`
+	PlayerID         int           `json:"element"`
+	Minutes          int           `json:"minutes"`
+	Points           int           `json:"total_points"`
+	Goals            int           `json:"goals_scored"`
+	Assists          int           `json:"assists"`
+	CleanSheets      int           `json:"clean_sheets"`
+	GoalsConceded    int           `json:"goals_conceded"`
+	Bonus            int           `json:"bonus"`
+	BPS              int           `json:"bps"`
+	Saves            int           `json:"saves"`
+	YellowCards      int           `json:"yellow_cards"`
+	RedCards         int           `json:"red_cards"`
+	OwnGoals         int           `json:"own_goals"`
+	PenaltiesSaved   int           `json:"penalties_saved"`
+	PenaltiesMissed  int           `json:"penalties_missed"`
+	TransfersBalance int           `json:"transfers_balance"`
+	Selected         int           `json:"selected"`
+	TransfersIn      int           `json:"transfers_in"`
+	TransfersOut     int           `json:"transfers_out"`
+	InDreamteam      bool          `json:"in_dreamteam"`
+	Influence        sourceDecimal `json:"influence"`
+	Creativity       sourceDecimal `json:"creativity"`
+	Threat           sourceDecimal `json:"threat"`
+	ICTIndex         sourceDecimal `json:"ict_index"`
+	ExpectedGoals    sourceDecimal `json:"expected_goals"`
+	ExpectedAssists  sourceDecimal `json:"expected_assists"`
 }
+
+type sourceDecimal string
+
+func (value *sourceDecimal) UnmarshalJSON(data []byte) error {
+	if string(data) == "null" {
+		*value = ""
+		return nil
+	}
+	var text string
+	if len(data) > 0 && data[0] == '"' {
+		if err := json.Unmarshal(data, &text); err != nil {
+			return err
+		}
+		*value = sourceDecimal(text)
+		return nil
+	}
+	var number json.Number
+	if err := json.Unmarshal(data, &number); err != nil {
+		return err
+	}
+	*value = sourceDecimal(number.String())
+	return nil
+}
+
 type EventLive struct {
 	Elements  []LivePlayerStats `json:"elements"`
 	Finalized *bool             `json:"finished,omitempty"`
@@ -324,7 +349,7 @@ type PastSeasonHistory struct {
 }
 
 func NewFPLSource(baseURL string) *FPLSource {
-	source := &FPLSource{BaseURL: strings.TrimRight(baseURL, "/"), Client: &http.Client{Timeout: 20 * time.Second}, Retries: 2, AllowDiscovery: true, RetryJitter: 100 * time.Millisecond, MaxConcurrent: 6}
+	source := &FPLSource{BaseURL: strings.TrimRight(baseURL, "/"), Client: &http.Client{Timeout: 20 * time.Second}, Retries: 2, AllowDiscovery: true, Kind: SourceOfficialCurrent, RetryJitter: 100 * time.Millisecond, MaxConcurrent: 6}
 	source.configureSemaphore()
 	return source
 }
@@ -643,7 +668,11 @@ func (f *FPLSource) NormalizeSnapshot(catalog BootstrapCatalog, fixtureFeed Fixt
 	if seasonID <= 0 || strings.TrimSpace(seasonName) == "" {
 		return Season{}, nil, nil, nil, nil, fmt.Errorf("source season identity is required: configure FPL_SOURCE_SEASON_ID and FPL_SOURCE_SEASON_NAME or provide bootstrap discovery metadata")
 	}
-	season := Season{ID: seasonID, Name: seasonName, IsCurrent: true, UpdatedAt: time.Now().UTC()}
+	kind := f.Kind
+	if kind == "" {
+		kind = SourceOfficialCurrent
+	}
+	season := Season{ID: seasonID, Name: seasonName, IsCurrent: kind == SourceOfficialCurrent, SourceKind: kind, LastImportedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
 	weeks := make([]Gameweek, 0, len(catalog.Events))
 	for _, event := range catalog.Events {
 		weeks = append(weeks, Gameweek{ID: event.ID, Name: event.Name, DeadlineTime: event.DeadlineTime, Finished: event.Finished, IsCurrent: event.IsCurrent, AverageScore: event.AverageScore})
@@ -678,9 +707,9 @@ func (f *FPLSource) PlayerHistory(ctx context.Context, playerID int) ([]PlayerHi
 	}
 	return history, checksum, nil
 }
-func parseFloat(value string) float64 {
+func parseFloat(value sourceDecimal) float64 {
 	var result float64
-	_, _ = fmt.Sscanf(value, "%f", &result)
+	_, _ = fmt.Sscanf(string(value), "%f", &result)
 	return result
 }
 func minutesSignal(minutes int) float64 {

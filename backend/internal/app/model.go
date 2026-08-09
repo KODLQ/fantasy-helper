@@ -10,10 +10,44 @@ const (
 )
 
 type Season struct {
-	ID        int       `json:"id"`
-	Name      string    `json:"name"`
-	IsCurrent bool      `json:"isCurrent"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	ID             int                    `json:"id"`
+	Name           string                 `json:"name"`
+	IsCurrent      bool                   `json:"isCurrent"`
+	SourceKind     SourceKind             `json:"sourceKind,omitempty"`
+	LastImportedAt time.Time              `json:"lastImportedAt,omitempty"`
+	Completeness   map[string]interface{} `json:"completeness,omitempty"`
+	MissingInputs  []string               `json:"missingInputs,omitempty"`
+	Warnings       []string               `json:"warnings,omitempty"`
+	UpdatedAt      time.Time              `json:"updatedAt"`
+}
+
+type SourceKind string
+
+const (
+	SourceOfficialCurrent   SourceKind = "official-current"
+	SourceRetainedSnapshot  SourceKind = "retained-snapshot"
+	SourceHistoricalArchive SourceKind = "historical-archive"
+)
+
+type SeasonState string
+
+const (
+	SeasonCurrent    SeasonState = "current"
+	SeasonHistorical SeasonState = "historical"
+)
+
+type SeasonCatalogueItem struct {
+	ID                 int                    `json:"id"`
+	Name               string                 `json:"name"`
+	State              SeasonState            `json:"state"`
+	AvailableGameweeks []Gameweek             `json:"availableGameweeks"`
+	DefaultGameweek    *int                   `json:"defaultGameweek"`
+	SourceKind         SourceKind             `json:"sourceKind"`
+	LastImportedAt     time.Time              `json:"lastImportedAt,omitempty"`
+	Freshness          Freshness              `json:"freshness"`
+	Completeness       map[string]interface{} `json:"completeness"`
+	MissingInputs      []string               `json:"missingInputs"`
+	Warnings           []string               `json:"warnings"`
 }
 
 type Gameweek struct {
@@ -165,6 +199,7 @@ type ResponseMeta struct {
 	Provenance []string    `json:"provenance,omitempty"`
 	Pagination *Pagination `json:"pagination,omitempty"`
 	Coverage   *Coverage   `json:"coverage,omitempty"`
+	Warnings   []string    `json:"warnings,omitempty"`
 }
 
 type Pagination struct {
@@ -194,15 +229,19 @@ type Scope struct {
 }
 
 type DatasetSnapshot struct {
-	ID                string    `json:"id"`
-	Dataset           string    `json:"dataset"`
-	State             string    `json:"state"`
-	SeasonID          int       `json:"seasonId"`
-	Gameweek          int       `json:"gameweek,omitempty"`
-	SourceFetchedAt   time.Time `json:"sourceFetchedAt,omitempty"`
-	NormalizedAt      time.Time `json:"normalizedAt"`
-	NormalizerVersion string    `json:"normalizerVersion"`
-	MissingInputs     []string  `json:"missingInputs"`
+	ID                string     `json:"id"`
+	Dataset           string     `json:"dataset"`
+	State             string     `json:"state"`
+	SeasonID          int        `json:"seasonId"`
+	Gameweek          int        `json:"gameweek,omitempty"`
+	SourceFetchedAt   time.Time  `json:"sourceFetchedAt,omitempty"`
+	NormalizedAt      time.Time  `json:"normalizedAt"`
+	NormalizerVersion string     `json:"normalizerVersion"`
+	MissingInputs     []string   `json:"missingInputs"`
+	SourceKind        SourceKind `json:"sourceKind,omitempty"`
+	SourceVersion     string     `json:"sourceVersion,omitempty"`
+	SupportedDatasets []string   `json:"supportedDatasets,omitempty"`
+	ManifestChecksum  string     `json:"manifestChecksum,omitempty"`
 }
 
 type PlayerDetail struct {

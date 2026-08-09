@@ -29,6 +29,33 @@ Use `make logs ENV=local` to follow service output and `make config ENV=local` t
 
 Production starts from persisted PostgreSQL warehouse data and reports unavailable freshness until the first official sync; deterministic demo data is confined to unit and browser fixtures. Use “Sync official data” to import the configured FPL endpoints. Set `FPL_SOURCE_SEASON_ID` and `FPL_SOURCE_SEASON_NAME` together for an explicit season; discovery mode is supported when the upstream bootstrap payload includes season metadata. Transport behavior is controlled with `FPL_SOURCE_TIMEOUT`, `FPL_SOURCE_RETRIES`, `FPL_SOURCE_RETRY_JITTER`, and `FPL_SOURCE_MAX_CONCURRENT`; retryable responses use exponential backoff, honor `Retry-After`, and expose redacted counters through the source adapter metrics.
 
+For multi-season operation, prefer the typed source-profile registry. The running API requires exactly one `official-current` profile; retained snapshots and historical archives are deliberately imported and are never live-refreshed:
+
+```sh
+FPL_SOURCE_PROFILES_JSON='[{"seasonId":2026,"seasonName":"2026/27","kind":"official-current","baseLocation":"https://fantasy.premierleague.com/api","supportedDatasets":["catalogue","fixtures","live","player-history"],"allowLiveRefresh":true}]'
+```
+
+Valid source kinds are `official-current`, `retained-snapshot`, and `historical-archive`. A successful new official-season write atomically moves the current marker and labels the previous official season as retained. A historical source cannot become current or accept scheduled/live sync scopes. The upstream FPL web API is unofficial and may change or omit older detailed data; the application therefore imports only observed payloads, records missing inputs, and never reconstructs aggregate prior-season summaries as gameweek facts.
+
+Historical imports use a versioned manifest beside the payload files. Paths must remain below the manifest directory and every payload requires its SHA-256 checksum:
+
+```json
+{
+  "version": 1,
+  "seasonId": 2025,
+  "seasonName": "2025/26",
+  "sourceKind": "historical-archive",
+  "supportedDatasets": ["catalogue", "fixtures", "player-history"],
+  "payloads": {
+    "bootstrap-static": { "path": "bootstrap-static.json", "sha256": "<64 hex characters>" },
+    "fixtures": { "path": "fixtures.json", "sha256": "<64 hex characters>" },
+    "element-summary/1": { "path": "element-summary-1.json", "sha256": "<64 hex characters>" }
+  }
+}
+```
+
+Run `cd backend && DATABASE_URL='postgres://…' go run ./cmd/import-archive /absolute/path/manifest.json`. Repeating a valid import is idempotent for canonical season identities and creates new provenance for auditability. Archive payloads, credentials, and licensed third-party data must stay outside Git.
+
 Scheduled synchronization is disabled by default until an initial manual sync has been verified. Enable it with `SYNC_SCHEDULER_ENABLED=true`. Catalog and fixtures default to hourly refreshes, live gameweeks to five-minute refreshes, post-match finalization to fifteen-minute confirmation refreshes, and historical reconciliation to daily runs. Configure these with `SYNC_CATALOG_CADENCE`, `SYNC_FIXTURE_CADENCE`, `SYNC_LIVE_CADENCE`, `SYNC_FINALIZATION_CADENCE`, and `SYNC_RECONCILE_CADENCE`; `SYNC_SCHEDULER_TICK` controls how often due policies are evaluated. Scope locking prevents the scheduler from overlapping an active manual or scheduled run.
 
 Raw-body retention is also opt-in with `RETENTION_CLEANUP_ENABLED=true`. Baseline bodies default to 90 days (`RAW_PAYLOAD_RETENTION=2160h`) and finalized live bodies to 30 days (`LIVE_PAYLOAD_RETENTION=720h`). Cleanup nulls eligible raw bodies but preserves source metadata and checksums, invalid diagnostics, snapshot-linked reproducibility inputs, and every canonical fact.
@@ -36,6 +63,7 @@ Raw-body retention is also opt-in with `RETENTION_CLEANUP_ENABLED=true`. Baselin
 ## API surface
 
 - `GET /healthz` — service, database-network, and data status.
+- `GET /api/v1/seasons` — newest-first season catalogue, source provenance, gameweek availability, completeness, and deterministic defaults.
 - `GET /api/v1/sync/status` — current/last sync state and freshness warning.
 - `POST /api/v1/sync` — start an asynchronous official data sync. The JSON body may provide `scope` (`catalog`, `fixtures`, `live`, `player-history`, or `full`), `seasonId`, and `gameweek`.
 - `GET /api/v1/data/snapshots` — common-envelope list of point-in-time warehouse datasets.
@@ -44,6 +72,10 @@ Raw-body retention is also opt-in with `RETENTION_CLEANUP_ENABLED=true`. Baselin
 - `GET /api/v1/players/compare?ids=1,2` — compare up to four players.
 - `GET|PUT /api/v1/squad` — read or validate/save the local planning squad.
 - `POST /api/v1/recommendations` — generate the baseline lineup, bench, captain, and vice-captain.
+
+Season-dependent version-one endpoints accept `seasonId` and echo the resolved value in `meta.scope.seasonId`. Omission temporarily resolves to the deterministic default and emits a deprecation warning. The browser stores selection in `?season=<id>&gameweek=<id>`; an explicit URL wins over the remembered local selection, and unknown URLs remain visible instead of silently redirecting.
+
+To diagnose scope problems, inspect `/api/v1/seasons`, the response `meta.scope`, freshness/missing-input fields, and the latest `/api/v1/sync/status`. Roll back the application by deploying the previous backend/frontend while preserving normalized season data. Apply the migration down file only when no newer migration or imported data depends on its columns; removing a historical season is intentionally not part of application rollback.
 
 ## Data and recommendation limits
 

@@ -3,10 +3,12 @@ package app
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -19,6 +21,7 @@ type Config struct {
 	SourceSeasonID       int
 	SourceSeasonName     string
 	SourceDiscovery      bool
+	SourceProfiles       []SourceProfile
 	SourceTimeout        time.Duration
 	SourceRetries        int
 	SourceRetryJitter    time.Duration
@@ -66,6 +69,25 @@ func LoadConfig() (Config, error) {
 	if seasonID > 0 {
 		discovery = false
 	}
+	profiles, err := loadSourceProfiles(os.Getenv("FPL_SOURCE_PROFILES_JSON"))
+	if err != nil {
+		return Config{}, err
+	}
+	if len(profiles) > 0 {
+		var official *SourceProfile
+		for index := range profiles {
+			if profiles[index].Kind == SourceOfficialCurrent {
+				if official != nil {
+					return Config{}, fmt.Errorf("FPL_SOURCE_PROFILES_JSON may contain only one official-current profile")
+				}
+				official = &profiles[index]
+			}
+		}
+		if official == nil {
+			return Config{}, fmt.Errorf("FPL_SOURCE_PROFILES_JSON requires one official-current profile for the running API")
+		}
+		seasonID, seasonName, discovery = official.SeasonID, official.SeasonName, false
+	}
 	retries, err := envInt("FPL_SOURCE_RETRIES", 2)
 	if err != nil {
 		return Config{}, err
@@ -103,6 +125,7 @@ func LoadConfig() (Config, error) {
 		SourceSeasonID:       seasonID,
 		SourceSeasonName:     seasonName,
 		SourceDiscovery:      discovery,
+		SourceProfiles:       profiles,
 		SourceTimeout:        envDuration("FPL_SOURCE_TIMEOUT", 20*time.Second),
 		SourceRetries:        retries,
 		SourceRetryJitter:    envDuration("FPL_SOURCE_RETRY_JITTER", 100*time.Millisecond),
@@ -125,6 +148,27 @@ func LoadConfig() (Config, error) {
 		DatabasePing:         envDuration("DB_PING_TIMEOUT", 3*time.Second),
 		ShutdownTimeout:      envDuration("SHUTDOWN_TIMEOUT", 10*time.Second),
 	}, nil
+}
+
+func loadSourceProfiles(value string) ([]SourceProfile, error) {
+	if strings.TrimSpace(value) == "" {
+		return nil, nil
+	}
+	var profiles []SourceProfile
+	if err := json.Unmarshal([]byte(value), &profiles); err != nil {
+		return nil, fmt.Errorf("FPL_SOURCE_PROFILES_JSON must be valid JSON: %w", err)
+	}
+	seen := map[int]struct{}{}
+	for _, profile := range profiles {
+		if err := profile.Validate(); err != nil {
+			return nil, fmt.Errorf("invalid source profile for season %d: %w", profile.SeasonID, err)
+		}
+		if _, exists := seen[profile.SeasonID]; exists {
+			return nil, fmt.Errorf("duplicate source profile for season %d", profile.SeasonID)
+		}
+		seen[profile.SeasonID] = struct{}{}
+	}
+	return profiles, nil
 }
 
 func envBool(key string, fallback bool) bool {

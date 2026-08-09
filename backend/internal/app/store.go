@@ -114,6 +114,7 @@ func (s *Store) ApplySnapshot(season Season, weeks []Gameweek, teams []Team, pla
 }
 
 type PlayerQuery struct {
+	SeasonID   int
 	Search     string
 	Position   int
 	TeamID     int
