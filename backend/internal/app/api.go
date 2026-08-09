@@ -542,7 +542,8 @@ func (a *API) players(w http.ResponseWriter, r *http.Request) {
 	} else {
 		results, total = a.Store.SearchPlayers(query)
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{"items": results, "total": total, "page": query.Page, "pageSize": query.PageSize, "freshness": a.requestFreshness(r.Context(), Scope{Dataset: "public-fpl"})})
+	freshness := a.requestFreshness(r.Context(), Scope{Dataset: "public-fpl"})
+	writeEnvelope(w, http.StatusOK, w.Header().Get("X-Request-ID"), Scope{Dataset: "public-fpl"}, freshness, map[string]interface{}{"items": results, "total": total, "page": query.Page, "pageSize": query.PageSize, "freshness": freshness})
 }
 func (a *API) playerDetail(w http.ResponseWriter, r *http.Request, id int) {
 	if researchRepository, ok := a.Repository.(ResearchReadRepository); ok {
@@ -556,7 +557,7 @@ func (a *API) playerDetail(w http.ResponseWriter, r *http.Request, id int) {
 			return
 		}
 		detail.Freshness = a.requestFreshness(r.Context(), Scope{Dataset: "public-fpl"})
-		writeJSON(w, http.StatusOK, detail)
+		writeEnvelope(w, http.StatusOK, w.Header().Get("X-Request-ID"), Scope{Dataset: "public-fpl"}, detail.Freshness, detail)
 		return
 	}
 	player, ok := a.Store.Player(id)
@@ -565,7 +566,8 @@ func (a *API) playerDetail(w http.ResponseWriter, r *http.Request, id int) {
 		return
 	}
 	team, _ := a.Store.Team(player.TeamID)
-	writeJSON(w, http.StatusOK, map[string]interface{}{"player": player, "team": team, "history": a.Store.History(id), "fixtures": a.Store.UpcomingFixtures(player.TeamID), "freshness": a.Store.Freshness()})
+	freshness := a.Store.Freshness()
+	writeEnvelope(w, http.StatusOK, w.Header().Get("X-Request-ID"), Scope{Dataset: "public-fpl"}, freshness, map[string]interface{}{"player": player, "team": team, "history": a.Store.History(id), "fixtures": a.Store.UpcomingFixtures(player.TeamID), "freshness": freshness})
 }
 func (a *API) compare(w http.ResponseWriter, r *http.Request) {
 	ids := strings.Split(r.URL.Query().Get("ids"), ",")
@@ -583,7 +585,8 @@ func (a *API) compare(w http.ResponseWriter, r *http.Request) {
 		}
 		items = append(items, map[string]interface{}{"player": player, "team": mustTeam(a.Store.Team(player.TeamID)), "history": a.Store.History(id)})
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{"items": items, "freshness": a.Store.Freshness()})
+	freshness := a.Store.Freshness()
+	writeEnvelope(w, http.StatusOK, w.Header().Get("X-Request-ID"), Scope{Dataset: "public-fpl"}, freshness, map[string]interface{}{"items": items, "freshness": freshness})
 }
 func mustTeam(team Team, ok bool) Team { return team }
 func (a *API) squad(w http.ResponseWriter, r *http.Request) {
@@ -591,7 +594,8 @@ func (a *API) squad(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		squad := a.Store.EnrichSquad(a.Store.GetSquad())
 		squad.Validation = a.Store.ValidatePlan(squad)
-		writeJSON(w, http.StatusOK, squad)
+		freshness := a.Store.Freshness()
+		writeEnvelope(w, http.StatusOK, w.Header().Get("X-Request-ID"), Scope{Dataset: "public-fpl"}, freshness, squad)
 	case http.MethodPut:
 		var input Squad
 		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
@@ -612,7 +616,8 @@ func (a *API) squad(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		a.Store.SaveSquad(input)
-		writeJSON(w, http.StatusOK, a.Store.EnrichSquad(input))
+		freshness := a.Store.Freshness()
+		writeEnvelope(w, http.StatusOK, w.Header().Get("X-Request-ID"), Scope{Dataset: "public-fpl"}, freshness, a.Store.EnrichSquad(input))
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Use GET or PUT for the squad.", nil)
 	}
@@ -633,5 +638,6 @@ func (a *API) recommendations(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, "recommendation_failed", "Recommendation could not be generated.", errors)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{"recommendation": recommendation, "freshness": a.Store.Freshness()})
+	freshness := a.Store.Freshness()
+	writeEnvelope(w, http.StatusOK, w.Header().Get("X-Request-ID"), Scope{Dataset: "public-fpl"}, freshness, map[string]interface{}{"recommendation": recommendation, "freshness": freshness})
 }

@@ -21,13 +21,16 @@ func TestAPIResearchSquadAndRecommendationFlow(t *testing.T) {
 		t.Fatalf("research status = %d", research.Code)
 	}
 	var researchBody struct {
-		Items []Player `json:"items"`
-		Total int      `json:"total"`
+		Data struct {
+			Items []Player `json:"items"`
+			Total int      `json:"total"`
+		} `json:"data"`
+		Meta ResponseMeta `json:"meta"`
 	}
 	if err := json.NewDecoder(research.Body).Decode(&researchBody); err != nil {
 		t.Fatal(err)
 	}
-	if len(researchBody.Items) != 3 || researchBody.Total < 3 {
+	if len(researchBody.Data.Items) != 3 || researchBody.Data.Total < 3 || researchBody.Meta.RequestID == "" || researchBody.Meta.Freshness.State == "" {
 		t.Fatalf("unexpected research response: %#v", researchBody)
 	}
 
@@ -42,6 +45,18 @@ func TestAPIResearchSquadAndRecommendationFlow(t *testing.T) {
 	handler.ServeHTTP(recommendation, httptest.NewRequest(http.MethodPost, "/api/v1/recommendations", bytes.NewBufferString(`{}`)))
 	if recommendation.Code != http.StatusOK {
 		t.Fatalf("recommendation status = %d, body = %s", recommendation.Code, recommendation.Body.String())
+	}
+	var recommendationBody struct {
+		Data struct {
+			Recommendation Recommendation `json:"recommendation"`
+		} `json:"data"`
+		Meta ResponseMeta `json:"meta"`
+	}
+	if err := json.NewDecoder(recommendation.Body).Decode(&recommendationBody); err != nil {
+		t.Fatal(err)
+	}
+	if recommendationBody.Data.Recommendation.AlgorithmVersion == "" || recommendationBody.Meta.Freshness.State == "" {
+		t.Fatalf("recommendation response lost common freshness metadata: %#v", recommendationBody)
 	}
 }
 

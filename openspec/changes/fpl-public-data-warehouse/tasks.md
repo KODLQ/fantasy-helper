@@ -39,7 +39,7 @@
 ## 4. API and analytical read models
 
 - [ ] 4.1 Replace production in-memory reads with PostgreSQL repositories while preserving existing API response contracts.
-- [ ] 4.2 Add dataset-level freshness and partial-sync metadata to research and recommendation responses.
+- [x] 4.2 Add dataset-level freshness and partial-sync metadata to research and recommendation responses.
 - [ ] 4.3 Add read models for rolling form, price/value changes, availability, fixture context, and historical gameweek analysis.
 - [x] 4.4 Add database-backed sync status, stage progress, diagnostics summary, and retry endpoints.
 - [ ] 4.5 Keep the in-memory store as a fixture-backed unit-test implementation only.
