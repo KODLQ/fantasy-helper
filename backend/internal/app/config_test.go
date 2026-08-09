@@ -69,3 +69,25 @@ func TestLoadConfigValidatesSourceProfiles(t *testing.T) {
 		})
 	}
 }
+
+func TestLoadConfigAuthenticationLifecycle(t *testing.T) {
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("AUTH_REGISTRATION_ENABLED", "")
+	t.Setenv("AUTH_COOKIE_SECURE", "")
+	t.Setenv("AUTH_ALLOWED_ORIGIN", "https://fantasy.local")
+	t.Setenv("AUTH_SESSION_IDLE_TIMEOUT", "2h")
+	t.Setenv("AUTH_SESSION_ABSOLUTE_TIMEOUT", "48h")
+	t.Setenv("AUTH_BOOTSTRAP_EMAIL", " owner@example.test ")
+	t.Setenv("AUTH_BOOTSTRAP_PASSWORD", "Bootstrap-password-value-42")
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AuthRegistration || !cfg.AuthCookieSecure || cfg.AuthAllowedOrigin != "https://fantasy.local" || cfg.AuthIdleTimeout != 2*time.Hour || cfg.AuthAbsoluteTimeout != 48*time.Hour || cfg.AuthBootstrapEmail != "owner@example.test" {
+		t.Fatalf("unexpected auth configuration: %#v", cfg)
+	}
+	t.Setenv("AUTH_SESSION_IDLE_TIMEOUT", "72h")
+	if _, err := LoadConfig(); err == nil {
+		t.Fatal("expected idle timeout beyond absolute lifetime to fail")
+	}
+}

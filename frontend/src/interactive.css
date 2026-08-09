@@ -77,3 +77,13 @@
   font-size: 12px;
   margin-top: 5px;
 }
+.auth-panel { display: grid; gap: .7rem; padding: 1rem; border: 1px solid var(--line); border-radius: 12px; background: rgba(255,255,255,.025); }
+.auth-panel.compact { padding: .75rem; font-size: .82rem; }
+.auth-panel h3, .auth-panel p { margin: 0; }
+.auth-panel form { display: grid; gap: .65rem; }
+.auth-panel label { display: grid; gap: .3rem; color: var(--muted); font-size: .78rem; }
+.auth-panel input { min-width: 0; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--text); padding: .6rem; }
+.auth-panel small, .auth-panel span { color: var(--muted); overflow-wrap: anywhere; }
+.form-error { color: #ffb4a8; font-size: .8rem; }
+.protected-workspace { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 420px); gap: 2rem; align-items: start; padding: 2rem; border: 1px solid var(--line); border-radius: 16px; background: var(--panel); }
+@media (max-width: 900px) { .protected-workspace { grid-template-columns: 1fr; } }

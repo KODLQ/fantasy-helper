@@ -60,6 +60,21 @@ func main() {
 	api := app.NewAPI(store, source, func(ctx context.Context) bool {
 		return database.PingContext(ctx) == nil
 	}, logger, repository)
+	authService, err := app.NewAuthService(repository, app.AuthRuntimeConfig{RegistrationEnabled: cfg.AuthRegistration, CookieSecure: cfg.AuthCookieSecure, AllowedOrigin: cfg.AuthAllowedOrigin, IdleTimeout: cfg.AuthIdleTimeout, AbsoluteTimeout: cfg.AuthAbsoluteTimeout})
+	if err != nil {
+		logger.Error("initialize authentication failed", "error", err)
+		os.Exit(1)
+	}
+	_, created, bootstrapErr := authService.Bootstrap(context.Background(), cfg.AuthBootstrapEmail, cfg.AuthBootstrapPassword)
+	cfg.AuthBootstrapPassword = ""
+	_ = os.Unsetenv("AUTH_BOOTSTRAP_PASSWORD")
+	if bootstrapErr != nil {
+		logger.Error("bootstrap authentication failed", "error", bootstrapErr)
+		os.Exit(1)
+	} else if created {
+		logger.Info("local bootstrap user created")
+	}
+	api.EnableAuth(authService)
 	api.SyncWorkers = cfg.SyncWorkers
 	schedulerCtx, stopScheduler := context.WithCancel(context.Background())
 	defer stopScheduler()

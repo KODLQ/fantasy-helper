@@ -21,6 +21,7 @@ type API struct {
 	DBHealthy   func(context.Context) bool
 	Logger      *slog.Logger
 	Repository  Repository
+	Auth        *AuthService
 	SyncWorkers int
 	startMu     sync.Mutex
 	syncMu      sync.Mutex
@@ -125,6 +126,12 @@ func (a *API) Shutdown(ctx context.Context) error {
 func (a *API) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", a.health)
+	mux.HandleFunc("/api/v1/auth/config", a.authConfig)
+	mux.HandleFunc("/api/v1/auth/register", a.authRegister)
+	mux.HandleFunc("/api/v1/auth/login", a.authLogin)
+	mux.HandleFunc("/api/v1/auth/logout", a.authLogout)
+	mux.HandleFunc("/api/v1/auth/me", a.authMe)
+	mux.HandleFunc("/api/v1/auth/password", a.authPassword)
 	mux.HandleFunc("/api/v1/sync/status", a.syncStatus)
 	mux.HandleFunc("/api/v1/sync/runs/", a.syncRun)
 	mux.HandleFunc("/api/v1/data/snapshots", a.dataSnapshots)
@@ -136,7 +143,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/players/compare", a.compare)
 	mux.HandleFunc("/api/v1/squad", a.squad)
 	mux.HandleFunc("/api/v1/recommendations", a.recommendations)
-	return withCORS(withRequestID(mux))
+	return a.withCORS(withRequestID(a.withOptionalAuth(mux)))
 }
 
 func (a *API) playerAnalysis(w http.ResponseWriter, r *http.Request) {
@@ -173,10 +180,16 @@ func (a *API) playerAnalysis(w http.ResponseWriter, r *http.Request) {
 	freshness := a.requestFreshness(r.Context(), scope)
 	writeEnvelope(w, http.StatusOK, w.Header().Get("X-Request-ID"), scope, freshness, item)
 }
-func withCORS(next http.Handler) http.Handler {
+func (a *API) withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Request-ID")
+		origin := "*"
+		if a.Auth != nil && a.Auth.Config.AllowedOrigin != "" {
+			origin = a.Auth.Config.AllowedOrigin
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
+			w.Header().Add("Vary", "Origin")
+		}
+		w.Header().Set("Access-Control-Allow-Origin", origin)
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Request-ID, X-CSRF-Token")
 		w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PUT,OPTIONS")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
@@ -337,6 +350,9 @@ func (a *API) syncRun(w http.ResponseWriter, r *http.Request) {
 		writeContractError(w, http.StatusMethodNotAllowed, w.Header().Get("X-Request-ID"), "method_not_allowed", "Use POST /api/v1/sync/runs/{id}/retry.", false, nil)
 		return
 	}
+	if _, ok := a.requireMutationAuth(w, r); !ok {
+		return
+	}
 	path := strings.TrimSuffix(strings.TrimPrefix(strings.TrimRight(r.URL.Path, "/"), "/api/v1/sync/runs/"), "/retry")
 	runID, err := strconv.ParseInt(path, 10, 64)
 	if err != nil || runID <= 0 {
@@ -411,6 +427,9 @@ func (a *API) dataSnapshots(w http.ResponseWriter, r *http.Request) {
 func (a *API) sync(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Use POST to start a sync.", nil)
+		return
+	}
+	if _, ok := a.requireMutationAuth(w, r); !ok {
 		return
 	}
 	var request struct {
@@ -952,12 +971,21 @@ func (a *API) compare(w http.ResponseWriter, r *http.Request) {
 }
 func mustTeam(team Team, ok bool) Team { return team }
 func (a *API) squad(w http.ResponseWriter, r *http.Request) {
+	session, authenticated := a.requireAuth(w, r)
+	if !authenticated {
+		return
+	}
+	if r.Method == http.MethodPut {
+		if _, ok := a.requireMutationAuth(w, r); !ok {
+			return
+		}
+	}
 	season, warnings, err := a.resolveSeason(r.Context(), parseInt(r.URL.Query().Get("seasonId"), 0))
 	if err != nil {
 		writeSeasonResolutionError(w, w.Header().Get("X-Request-ID"), err)
 		return
 	}
-	domain, err := a.requestDomainStore(r.Context(), season.ID)
+	domain, err := a.requestDomainStoreForUser(r.Context(), season.ID, session.User.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "planning_unavailable", "Squad planning data is temporarily unavailable.", nil)
 		return
@@ -984,7 +1012,13 @@ func (a *API) squad(w http.ResponseWriter, r *http.Request) {
 		}
 		if a.Repository != nil {
 			var saveErr error
-			if repository, ok := a.Repository.(SeasonSquadRepository); ok {
+			if a.Auth != nil {
+				if repository, ok := a.Repository.(UserSeasonSquadRepository); ok {
+					saveErr = repository.SaveSquadForUserSeason(r.Context(), session.User.ID, season.ID, input)
+				} else {
+					saveErr = fmt.Errorf("authenticated squad repository is unavailable")
+				}
+			} else if repository, ok := a.Repository.(SeasonSquadRepository); ok {
 				saveErr = repository.SaveSquadForSeason(r.Context(), season.ID, input)
 			} else {
 				saveErr = a.Repository.SaveSquad(r.Context(), input)
@@ -994,7 +1028,9 @@ func (a *API) squad(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		a.Store.SaveSquad(input)
+		if a.Auth == nil {
+			a.Store.SaveSquad(input)
+		}
 		scope := Scope{SeasonID: season.ID, Dataset: "public-fpl"}
 		freshness := a.requestFreshness(r.Context(), scope)
 		writeEnvelopeWithWarnings(w, http.StatusOK, w.Header().Get("X-Request-ID"), scope, freshness, warnings, domain.EnrichSquad(input))
@@ -1005,6 +1041,10 @@ func (a *API) squad(w http.ResponseWriter, r *http.Request) {
 func (a *API) recommendations(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Use POST for recommendations.", nil)
+		return
+	}
+	session, authenticated := a.requireMutationAuth(w, r)
+	if !authenticated {
 		return
 	}
 	var body struct {
@@ -1018,7 +1058,7 @@ func (a *API) recommendations(w http.ResponseWriter, r *http.Request) {
 		writeSeasonResolutionError(w, w.Header().Get("X-Request-ID"), err)
 		return
 	}
-	domain, err := a.requestDomainStore(r.Context(), season.ID)
+	domain, err := a.requestDomainStoreForUser(r.Context(), season.ID, session.User.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "recommendation_unavailable", "Recommendation data is temporarily unavailable.", nil)
 		return
@@ -1034,6 +1074,20 @@ func (a *API) recommendations(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) requestDomainStore(ctx context.Context, seasonID int) (*Store, error) {
+	return a.requestDomainStoreForOwner(ctx, seasonID, nil)
+}
+
+func (a *API) requestDomainStoreForUser(ctx context.Context, seasonID int, userID int64) (*Store, error) {
+	if a.Auth == nil {
+		return a.requestDomainStore(ctx, seasonID)
+	}
+	if userID <= 0 {
+		return nil, fmt.Errorf("authenticated workspace owner is required")
+	}
+	return a.requestDomainStoreForOwner(ctx, seasonID, &userID)
+}
+
+func (a *API) requestDomainStoreForOwner(ctx context.Context, seasonID int, userID *int64) (*Store, error) {
 	if a.Repository == nil {
 		return a.Store, nil
 	}
@@ -1054,7 +1108,13 @@ func (a *API) requestDomainStore(ctx context.Context, seasonID int) (*Store, err
 	domain := NewWarehouseCache()
 	domain.ApplySnapshot(snapshot.Season, snapshot.Gameweeks, snapshot.Teams, snapshot.Players, snapshot.Fixtures, snapshot.Histories)
 	var squad Squad
-	if repository, ok := a.Repository.(SeasonSquadRepository); ok {
+	if userID != nil {
+		if repository, ok := a.Repository.(UserSeasonSquadRepository); ok {
+			squad, found, err = repository.LoadSquadForUserSeason(ctx, *userID, seasonID)
+		} else {
+			return nil, fmt.Errorf("authenticated squad repository is unavailable")
+		}
+	} else if repository, ok := a.Repository.(SeasonSquadRepository); ok {
 		squad, found, err = repository.LoadSquadForSeason(ctx, seasonID)
 	} else {
 		squad, found, err = a.Repository.LoadSquad(ctx)

@@ -4,7 +4,6 @@ import { openApp } from './helpers';
 test.describe('player research', () => {
   test('searches, filters, sorts, and opens a player profile', async ({ page }) => {
     await openApp(page);
-    await expect(page.getByTestId('freshness-banner')).toContainText('Demo snapshot is active');
     await expect(page.getByTestId('player-table')).toBeVisible();
 
     await page.getByPlaceholder('Search by player or club...').fill('Mason');

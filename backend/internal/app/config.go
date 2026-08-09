@@ -15,37 +15,45 @@ import (
 )
 
 type Config struct {
-	Port                 string
-	DatabaseURL          string
-	FPLBaseURL           string
-	SourceSeasonID       int
-	SourceSeasonName     string
-	SourceDiscovery      bool
-	SourceProfiles       []SourceProfile
-	SourceTimeout        time.Duration
-	SourceRetries        int
-	SourceRetryJitter    time.Duration
-	SourceMaxConcurrent  int
-	SyncWorkers          int
-	SchedulerEnabled     bool
-	SchedulerTick        time.Duration
-	CatalogCadence       time.Duration
-	FixtureCadence       time.Duration
-	LiveCadence          time.Duration
-	FinalizationCadence  time.Duration
-	ReconcileCadence     time.Duration
-	RetentionEnabled     bool
-	RetentionCadence     time.Duration
-	RawPayloadRetention  time.Duration
-	LivePayloadRetention time.Duration
-	Environment          string
-	DatabaseMaxConns     int
-	DatabaseMaxIdle      int
-	DatabasePing         time.Duration
-	ShutdownTimeout      time.Duration
+	Port                  string
+	DatabaseURL           string
+	FPLBaseURL            string
+	SourceSeasonID        int
+	SourceSeasonName      string
+	SourceDiscovery       bool
+	SourceProfiles        []SourceProfile
+	SourceTimeout         time.Duration
+	SourceRetries         int
+	SourceRetryJitter     time.Duration
+	SourceMaxConcurrent   int
+	SyncWorkers           int
+	SchedulerEnabled      bool
+	SchedulerTick         time.Duration
+	CatalogCadence        time.Duration
+	FixtureCadence        time.Duration
+	LiveCadence           time.Duration
+	FinalizationCadence   time.Duration
+	ReconcileCadence      time.Duration
+	RetentionEnabled      bool
+	RetentionCadence      time.Duration
+	RawPayloadRetention   time.Duration
+	LivePayloadRetention  time.Duration
+	Environment           string
+	DatabaseMaxConns      int
+	DatabaseMaxIdle       int
+	DatabasePing          time.Duration
+	ShutdownTimeout       time.Duration
+	AuthRegistration      bool
+	AuthCookieSecure      bool
+	AuthAllowedOrigin     string
+	AuthIdleTimeout       time.Duration
+	AuthAbsoluteTimeout   time.Duration
+	AuthBootstrapEmail    string
+	AuthBootstrapPassword string
 }
 
 func LoadConfig() (Config, error) {
+	environment := configEnv("APP_ENV", "local")
 	maxConns, err := envInt("DB_MAX_CONNS", 8)
 	if err != nil {
 		return Config{}, err
@@ -118,35 +126,47 @@ func LoadConfig() (Config, error) {
 	if schedulerTick <= 0 || catalogCadence <= 0 || fixtureCadence <= 0 || liveCadence <= 0 || finalizationCadence <= 0 || reconcileCadence <= 0 || retentionCadence <= 0 || rawPayloadRetention <= 0 || livePayloadRetention <= 0 {
 		return Config{}, fmt.Errorf("sync scheduler tick and cadence durations must be positive")
 	}
+	authIdle := envDuration("AUTH_SESSION_IDLE_TIMEOUT", 12*time.Hour)
+	authAbsolute := envDuration("AUTH_SESSION_ABSOLUTE_TIMEOUT", 7*24*time.Hour)
+	if authIdle <= 0 || authAbsolute <= 0 || authIdle > authAbsolute {
+		return Config{}, fmt.Errorf("authentication session timeouts must be positive and idle must not exceed absolute")
+	}
 	return Config{
-		Port:                 configEnv("BACKEND_PORT", "8080"),
-		DatabaseURL:          os.Getenv("DATABASE_URL"),
-		FPLBaseURL:           configEnv("FPL_BASE_URL", "https://fantasy.premierleague.com/api"),
-		SourceSeasonID:       seasonID,
-		SourceSeasonName:     seasonName,
-		SourceDiscovery:      discovery,
-		SourceProfiles:       profiles,
-		SourceTimeout:        envDuration("FPL_SOURCE_TIMEOUT", 20*time.Second),
-		SourceRetries:        retries,
-		SourceRetryJitter:    envDuration("FPL_SOURCE_RETRY_JITTER", 100*time.Millisecond),
-		SourceMaxConcurrent:  maxConcurrent,
-		SyncWorkers:          workers,
-		SchedulerEnabled:     envBool("SYNC_SCHEDULER_ENABLED", false),
-		SchedulerTick:        schedulerTick,
-		CatalogCadence:       catalogCadence,
-		FixtureCadence:       fixtureCadence,
-		LiveCadence:          liveCadence,
-		FinalizationCadence:  finalizationCadence,
-		ReconcileCadence:     reconcileCadence,
-		RetentionEnabled:     envBool("RETENTION_CLEANUP_ENABLED", false),
-		RetentionCadence:     retentionCadence,
-		RawPayloadRetention:  rawPayloadRetention,
-		LivePayloadRetention: livePayloadRetention,
-		Environment:          configEnv("APP_ENV", "local"),
-		DatabaseMaxConns:     maxConns,
-		DatabaseMaxIdle:      maxIdle,
-		DatabasePing:         envDuration("DB_PING_TIMEOUT", 3*time.Second),
-		ShutdownTimeout:      envDuration("SHUTDOWN_TIMEOUT", 10*time.Second),
+		Port:                  configEnv("BACKEND_PORT", "8080"),
+		DatabaseURL:           os.Getenv("DATABASE_URL"),
+		FPLBaseURL:            configEnv("FPL_BASE_URL", "https://fantasy.premierleague.com/api"),
+		SourceSeasonID:        seasonID,
+		SourceSeasonName:      seasonName,
+		SourceDiscovery:       discovery,
+		SourceProfiles:        profiles,
+		SourceTimeout:         envDuration("FPL_SOURCE_TIMEOUT", 20*time.Second),
+		SourceRetries:         retries,
+		SourceRetryJitter:     envDuration("FPL_SOURCE_RETRY_JITTER", 100*time.Millisecond),
+		SourceMaxConcurrent:   maxConcurrent,
+		SyncWorkers:           workers,
+		SchedulerEnabled:      envBool("SYNC_SCHEDULER_ENABLED", false),
+		SchedulerTick:         schedulerTick,
+		CatalogCadence:        catalogCadence,
+		FixtureCadence:        fixtureCadence,
+		LiveCadence:           liveCadence,
+		FinalizationCadence:   finalizationCadence,
+		ReconcileCadence:      reconcileCadence,
+		RetentionEnabled:      envBool("RETENTION_CLEANUP_ENABLED", false),
+		RetentionCadence:      retentionCadence,
+		RawPayloadRetention:   rawPayloadRetention,
+		LivePayloadRetention:  livePayloadRetention,
+		Environment:           environment,
+		DatabaseMaxConns:      maxConns,
+		DatabaseMaxIdle:       maxIdle,
+		DatabasePing:          envDuration("DB_PING_TIMEOUT", 3*time.Second),
+		ShutdownTimeout:       envDuration("SHUTDOWN_TIMEOUT", 10*time.Second),
+		AuthRegistration:      envBool("AUTH_REGISTRATION_ENABLED", environment == "local" || environment == "development"),
+		AuthCookieSecure:      envBool("AUTH_COOKIE_SECURE", environment != "local" && environment != "development"),
+		AuthAllowedOrigin:     configEnv("AUTH_ALLOWED_ORIGIN", "http://localhost:5173"),
+		AuthIdleTimeout:       authIdle,
+		AuthAbsoluteTimeout:   authAbsolute,
+		AuthBootstrapEmail:    strings.TrimSpace(os.Getenv("AUTH_BOOTSTRAP_EMAIL")),
+		AuthBootstrapPassword: os.Getenv("AUTH_BOOTSTRAP_PASSWORD"),
 	}, nil
 }
 

@@ -60,9 +60,25 @@ Scheduled synchronization is disabled by default until an initial manual sync ha
 
 Raw-body retention is also opt-in with `RETENTION_CLEANUP_ENABLED=true`. Baseline bodies default to 90 days (`RAW_PAYLOAD_RETENTION=2160h`) and finalized live bodies to 30 days (`LIVE_PAYLOAD_RETENTION=720h`). Cleanup nulls eligible raw bodies but preserves source metadata and checksums, invalid diagnostics, snapshot-linked reproducibility inputs, and every canonical fact.
 
+## Local authentication and ownership
+
+Public seasons, players, fixtures, and warehouse freshness remain readable without an account. Planning squads, recommendations, manual sync controls, and future manager/league imports require a local user. Emails are normalized case-insensitively, passwords require at least 12 non-obvious characters and are stored only as versioned Argon2id hashes, and browser sessions use hashed opaque tokens with idle and absolute expiry.
+
+Local development enables registration by default. Non-development environments disable it unless `AUTH_REGISTRATION_ENABLED=true` is set. A one-time owner can be created with `AUTH_BOOTSTRAP_EMAIL` and `AUTH_BOOTSTRAP_PASSWORD`; the password must be supplied through local secret configuration, is removed from the backend process after successful creation, and must never be committed. When bootstrap creates the first user, legacy unowned squad rows are explicitly assigned to that user. There is no email provider, email verification, or password-reset email in this release.
+
+Session defaults are a 12-hour idle timeout and seven-day absolute lifetime, controlled by `AUTH_SESSION_IDLE_TIMEOUT` and `AUTH_SESSION_ABSOLUTE_TIMEOUT`. HTTPS deployments must use `AUTH_COOKIE_SECURE=true` and set `AUTH_ALLOWED_ORIGIN` to the exact browser origin. Cookie-authenticated mutations require that origin plus the session-bound CSRF token. Password changes rotate the current session and revoke all other sessions. Logout revokes the server record and clears the cookie.
+
+Private repository queries always derive `userId` from the authenticated session. Client-supplied owner IDs are ignored; inaccessible private records are not returned. Public warehouse tables stay shared and read-only across users.
+
 ## API surface
 
 - `GET /healthz` — service, database-network, and data status.
+- `GET /api/v1/auth/config` — registration and local credential-policy capabilities.
+- `POST /api/v1/auth/register` — create a local account when registration is enabled.
+- `POST /api/v1/auth/login` — authenticate and rotate to a new opaque browser session.
+- `GET /api/v1/auth/me` — resolve the current user and refresh the session-bound CSRF token.
+- `POST /api/v1/auth/logout` — idempotently revoke the current session.
+- `POST /api/v1/auth/password` — change password, rotate the current session, and revoke others.
 - `GET /api/v1/seasons` — newest-first season catalogue, source provenance, gameweek availability, completeness, and deterministic defaults.
 - `GET /api/v1/sync/status` — current/last sync state and freshness warning.
 - `POST /api/v1/sync` — start an asynchronous official data sync. The JSON body may provide `scope` (`catalog`, `fixtures`, `live`, `player-history`, or `full`), `seasonId`, and `gameweek`.
@@ -70,8 +86,8 @@ Raw-body retention is also opt-in with `RETENTION_CLEANUP_ENABLED=true`. Baselin
 - `GET /api/v1/players` — paginated search, filters, and deterministic sorting.
 - `GET /api/v1/players/:id` — normalized profile, history, and upcoming fixture context.
 - `GET /api/v1/players/compare?ids=1,2` — compare up to four players.
-- `GET|PUT /api/v1/squad` — read or validate/save the local planning squad.
-- `POST /api/v1/recommendations` — generate the baseline lineup, bench, captain, and vice-captain.
+- `GET|PUT /api/v1/squad` — read or validate/save the authenticated user's planning squad.
+- `POST /api/v1/recommendations` — generate the authenticated user's baseline lineup, bench, captain, and vice-captain.
 
 Season-dependent version-one endpoints accept `seasonId` and echo the resolved value in `meta.scope.seasonId`. Omission temporarily resolves to the deterministic default and emits a deprecation warning. The browser stores selection in `?season=<id>&gameweek=<id>`; an explicit URL wins over the remembered local selection, and unknown URLs remain visible instead of silently redirecting.
 
@@ -79,7 +95,7 @@ To diagnose scope problems, inspect `/api/v1/seasons`, the response `meta.scope`
 
 ## Data and recommendation limits
 
-The first release is intentionally local and single-user. It does not authenticate to an FPL account, execute transfers, or access private leagues. The source sync keeps the last known good normalized snapshot when a stage fails. The recommendation is a documented heuristic using form, expected minutes, fixture difficulty, recent returns, and value; it is not a guaranteed point projection.
+The application uses local multi-user accounts but does not yet authenticate to an FPL account, execute transfers, or access private leagues. FPL remote-session handling arrives in the dependent manager/league sync change; local passwords are never FPL credentials. The source sync keeps the last known good normalized snapshot when a stage fails. The recommendation is a documented heuristic using form, expected minutes, fixture difficulty, recent returns, and value; it is not a guaranteed point projection.
 
 Upstream-shape fixtures for adapter tests live in `backend/testdata`. Keep them sanitized and update the adapter when the official response shape changes.
 

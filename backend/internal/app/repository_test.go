@@ -30,7 +30,7 @@ func TestPostgresRepositoryPersistence(t *testing.T) {
 	if err := repository.EnsureSchema(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := database.ExecContext(ctx, `TRUNCATE sync_diagnostics, sync_stages, sync_runs, squad_lineups, squad_plan_players, squad_plans, player_gameweek_history, player_season_history, fixtures, players, teams, gameweeks, seasons RESTART IDENTITY CASCADE`); err != nil {
+	if _, err := database.ExecContext(ctx, `TRUNCATE security_events, sessions, users, sync_diagnostics, sync_stages, sync_runs, squad_lineups, squad_plan_players, squad_plans, player_gameweek_history, player_season_history, fixtures, players, teams, gameweeks, seasons RESTART IDENTITY CASCADE`); err != nil {
 		t.Fatal(err)
 	}
 	if err := repository.EnsureSchema(ctx); err != nil {
@@ -163,6 +163,44 @@ func TestPostgresRepositoryPersistence(t *testing.T) {
 	}
 	if len(loadedSquad.PurchasePrices) != 15 || loadedSquad.Formation != squad.Formation || loadedSquad.CaptainID != squad.CaptainID {
 		t.Fatalf("unexpected loaded squad: %#v", loadedSquad)
+	}
+	firstUser, err := repository.CreateUser(ctx, User{Email: "first@example.test", DisplayName: "First", PasswordHash: "argon-hash-one", Status: "active"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondUser, err := repository.CreateUser(ctx, User{Email: "second@example.test", DisplayName: "Second", PasswordHash: "argon-hash-two", Status: "active"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstSquad := squad
+	firstSquad.Name = "First private squad"
+	secondSquad := squad
+	secondSquad.Name = "Second private squad"
+	if err := repository.SaveSquadForUserSeason(ctx, firstUser.ID, snapshot.Season.ID, firstSquad); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.SaveSquadForUserSeason(ctx, secondUser.ID, snapshot.Season.ID, secondSquad); err != nil {
+		t.Fatal(err)
+	}
+	loadedFirst, found, err := repository.LoadSquadForUserSeason(ctx, firstUser.ID, snapshot.Season.ID)
+	if err != nil || !found || loadedFirst.Name != firstSquad.Name {
+		t.Fatalf("first user squad leaked or disappeared: %#v found=%v err=%v", loadedFirst, found, err)
+	}
+	loadedSecond, found, err := repository.LoadSquadForUserSeason(ctx, secondUser.ID, snapshot.Season.ID)
+	if err != nil || !found || loadedSecond.Name != secondSquad.Name {
+		t.Fatalf("second user squad leaked or disappeared: %#v found=%v err=%v", loadedSecond, found, err)
+	}
+	now := time.Now().UTC()
+	session, err := repository.CreateSession(ctx, Session{UserID: firstUser.ID, TokenHash: strings.Repeat("a", 64), CSRFHash: strings.Repeat("b", 64), CreatedAt: now, LastSeenAt: now, IdleExpiresAt: now.Add(time.Hour), AbsoluteExpiresAt: now.Add(24 * time.Hour), DeviceMetadata: map[string]string{"browser": "test"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	loadedSession, sessionUser, found, err := repository.FindSessionByTokenHash(ctx, strings.Repeat("a", 64))
+	if err != nil || !found || loadedSession.ID != session.ID || sessionUser.ID != firstUser.ID || loadedSession.DeviceMetadata["browser"] != "test" {
+		t.Fatalf("session persistence failed: %#v %#v found=%v err=%v", loadedSession, sessionUser, found, err)
+	}
+	if err := repository.RecordSecurityEvent(ctx, SecurityEvent{RequestID: "repository-auth", UserID: &firstUser.ID, EventType: "login", Outcome: "success", SourceAddress: "127.0.0.1", OccurredAt: now}); err != nil {
+		t.Fatal(err)
 	}
 
 	historical := snapshot
