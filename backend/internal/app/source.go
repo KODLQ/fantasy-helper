@@ -12,10 +12,13 @@ import (
 )
 
 type FPLSource struct {
-	BaseURL       string
-	Client        *http.Client
-	Retries       int
-	OnObservation func(SourceObservation)
+	BaseURL        string
+	Client         *http.Client
+	Retries        int
+	SeasonID       int
+	SeasonName     string
+	AllowDiscovery bool
+	OnObservation  func(SourceObservation)
 }
 type SourceObservation struct {
 	Endpoint        string
@@ -28,6 +31,8 @@ type SourceObservation struct {
 	Diagnostic      string
 }
 type bootstrapResponse struct {
+	SeasonID     int                 `json:"season_id"`
+	SeasonName   string              `json:"season_name"`
 	Events       []sourceEvent       `json:"events"`
 	Phases       []sourcePhase       `json:"phases"`
 	Settings     json.RawMessage     `json:"game_settings"`
@@ -42,6 +47,7 @@ type sourcePhase struct {
 	StartEvent int    `json:"start_event"`
 	StopEvent  int    `json:"stop_event"`
 }
+type SourcePhase = sourcePhase
 type sourceElementType struct {
 	ID           int    `json:"id"`
 	SingularName string `json:"singular_name"`
@@ -50,7 +56,10 @@ type sourceElementType struct {
 	SquadMin     int    `json:"squad_min_select"`
 	SquadMax     int    `json:"squad_max_select"`
 }
+type SourceElementType = sourceElementType
 type BootstrapCatalog struct {
+	SeasonID     int
+	SeasonName   string
 	Events       []sourceEvent
 	Phases       []sourcePhase
 	Settings     json.RawMessage
@@ -66,32 +75,50 @@ type sourceEvent struct {
 	IsCurrent    bool       `json:"is_current"`
 	AverageScore float64    `json:"average_entry_score"`
 }
+type SourceEvent = sourceEvent
 type sourceTeam struct {
-	ID        int    `json:"id"`
-	Name      string `json:"name"`
-	ShortName string `json:"short_name"`
+	ID           int    `json:"id"`
+	Name         string `json:"name"`
+	ShortName    string `json:"short_name"`
+	Strength     int    `json:"strength"`
+	StrengthHome int    `json:"strength_overall_home"`
+	StrengthAway int    `json:"strength_overall_away"`
+	AttackHome   int    `json:"strength_attack_home"`
+	AttackAway   int    `json:"strength_attack_away"`
+	DefenceHome  int    `json:"strength_defence_home"`
+	DefenceAway  int    `json:"strength_defence_away"`
 }
+type SourceTeam = sourceTeam
 type sourceElement struct {
-	ID          int    `json:"id"`
-	FirstName   string `json:"first_name"`
-	SecondName  string `json:"second_name"`
-	WebName     string `json:"web_name"`
-	ElementType int    `json:"element_type"`
-	Team        int    `json:"team"`
-	NowCost     int    `json:"now_cost"`
-	TotalPoints int    `json:"total_points"`
-	Form        string `json:"form"`
-	Minutes     int    `json:"minutes"`
-	ValueForm   string `json:"value_form"`
-	Status      string `json:"status"`
-	News        string `json:"news"`
-	Chance      *int   `json:"chance_of_playing_next_round"`
-	Goals       int    `json:"goals_scored"`
-	Assists     int    `json:"assists"`
-	CleanSheets int    `json:"clean_sheets"`
-	Bonus       int    `json:"bonus"`
-	Saves       int    `json:"saves"`
+	ID                int    `json:"id"`
+	FirstName         string `json:"first_name"`
+	SecondName        string `json:"second_name"`
+	WebName           string `json:"web_name"`
+	ElementType       int    `json:"element_type"`
+	Team              int    `json:"team"`
+	NowCost           int    `json:"now_cost"`
+	TotalPoints       int    `json:"total_points"`
+	Form              string `json:"form"`
+	Minutes           int    `json:"minutes"`
+	ValueForm         string `json:"value_form"`
+	Status            string `json:"status"`
+	News              string `json:"news"`
+	Chance            *int   `json:"chance_of_playing_next_round"`
+	Goals             int    `json:"goals_scored"`
+	Assists           int    `json:"assists"`
+	CleanSheets       int    `json:"clean_sheets"`
+	Bonus             int    `json:"bonus"`
+	Saves             int    `json:"saves"`
+	SelectedByPercent string `json:"selected_by_percent"`
+	YellowCards       int    `json:"yellow_cards"`
+	RedCards          int    `json:"red_cards"`
+	OwnGoals          int    `json:"own_goals"`
+	PenaltiesSaved    int    `json:"penalties_saved"`
+	PenaltiesMissed   int    `json:"penalties_missed"`
+	ExpectedGoals     string `json:"expected_goals"`
+	ExpectedAssists   string `json:"expected_assists"`
 }
+type SourceElement = sourceElement
 type sourceFixture struct {
 	ID       int        `json:"id"`
 	Event    int        `json:"event"`
@@ -104,6 +131,7 @@ type sourceFixture struct {
 	HScore   *int       `json:"team_h_score"`
 	AScore   *int       `json:"team_a_score"`
 }
+type SourceFixture = sourceFixture
 type playerSummary struct {
 	History []sourceHistory `json:"history"`
 }
@@ -118,6 +146,7 @@ type sourceHistory struct {
 	Bonus       int `json:"bonus"`
 	Value       int `json:"value"`
 }
+type SourceHistory = sourceHistory
 
 type LivePlayerStats struct {
 	PlayerID        int    `json:"element"`
@@ -156,7 +185,14 @@ type ElementSummary struct {
 }
 
 func NewFPLSource(baseURL string) *FPLSource {
-	return &FPLSource{BaseURL: strings.TrimRight(baseURL, "/"), Client: &http.Client{Timeout: 20 * time.Second}, Retries: 2}
+	return &FPLSource{BaseURL: strings.TrimRight(baseURL, "/"), Client: &http.Client{Timeout: 20 * time.Second}, Retries: 2, AllowDiscovery: true}
+}
+func NewFPLSourceWithSeason(baseURL string, seasonID int, seasonName string) *FPLSource {
+	source := NewFPLSource(baseURL)
+	source.SeasonID = seasonID
+	source.SeasonName = seasonName
+	source.AllowDiscovery = false
+	return source
 }
 func (f *FPLSource) get(ctx context.Context, path string, target interface{}) (string, error) {
 	var last error
@@ -215,7 +251,7 @@ func (f *FPLSource) Bootstrap(ctx context.Context) (BootstrapCatalog, string, er
 	if err != nil {
 		return BootstrapCatalog{}, "", err
 	}
-	return BootstrapCatalog{Events: payload.Events, Phases: payload.Phases, Settings: payload.Settings, ElementTypes: payload.ElementTypes, Teams: payload.Teams, Elements: payload.Elements}, checksum, nil
+	return BootstrapCatalog{SeasonID: payload.SeasonID, SeasonName: payload.SeasonName, Events: payload.Events, Phases: payload.Phases, Settings: payload.Settings, ElementTypes: payload.ElementTypes, Teams: payload.Teams, Elements: payload.Elements}, checksum, nil
 }
 
 func (f *FPLSource) EventLive(ctx context.Context, gameweek int) (EventLive, string, error) {
@@ -241,18 +277,25 @@ func (f *FPLSource) Snapshot(ctx context.Context) (Season, []Gameweek, []Team, [
 		return Season{}, nil, nil, nil, nil, checksum, err
 	}
 	checksum = checksum + ":" + fixtureChecksum
-	season := Season{ID: 1, Name: fmt.Sprintf("%d/%d", time.Now().Year(), time.Now().Year()+1), IsCurrent: true, UpdatedAt: time.Now().UTC()}
+	seasonID, seasonName := f.SeasonID, f.SeasonName
+	if f.AllowDiscovery && seasonID == 0 && seasonName == "" {
+		seasonID, seasonName = catalog.SeasonID, catalog.SeasonName
+	}
+	if seasonID <= 0 || strings.TrimSpace(seasonName) == "" {
+		return Season{}, nil, nil, nil, nil, checksum, fmt.Errorf("source season identity is required: configure FPL_SOURCE_SEASON_ID and FPL_SOURCE_SEASON_NAME or provide bootstrap discovery metadata")
+	}
+	season := Season{ID: seasonID, Name: seasonName, IsCurrent: true, UpdatedAt: time.Now().UTC()}
 	weeks := make([]Gameweek, 0, len(catalog.Events))
 	for _, event := range catalog.Events {
 		weeks = append(weeks, Gameweek{ID: event.ID, Name: event.Name, DeadlineTime: event.DeadlineTime, Finished: event.Finished, IsCurrent: event.IsCurrent, AverageScore: event.AverageScore})
 	}
 	teams := make([]Team, 0, len(catalog.Teams))
 	for _, team := range catalog.Teams {
-		teams = append(teams, Team{ID: team.ID, Name: team.Name, ShortName: team.ShortName})
+		teams = append(teams, Team{ID: team.ID, Name: team.Name, ShortName: team.ShortName, Strength: team.Strength, StrengthHome: team.StrengthHome, StrengthAway: team.StrengthAway, AttackHome: team.AttackHome, AttackAway: team.AttackAway, DefenceHome: team.DefenceHome, DefenceAway: team.DefenceAway})
 	}
 	players := make([]Player, 0, len(catalog.Elements))
 	for _, player := range catalog.Elements {
-		players = append(players, Player{ID: player.ID, FirstName: player.FirstName, SecondName: player.SecondName, WebName: player.WebName, Position: player.ElementType, TeamID: player.Team, Price: float64(player.NowCost) / 10, TotalPoints: player.TotalPoints, Form: parseFloat(player.Form), Minutes: player.Minutes, Value: parseFloat(player.ValueForm), Status: player.Status, News: player.News, ChanceOfPlaying: player.Chance, GoalsScored: player.Goals, Assists: player.Assists, CleanSheets: player.CleanSheets, Bonus: player.Bonus, Saves: player.Saves, ExpectedMinutes: minutesSignal(player.Minutes), RecentReturns: float64(player.Goals+player.Assists) / 10})
+		players = append(players, Player{ID: player.ID, FirstName: player.FirstName, SecondName: player.SecondName, WebName: player.WebName, Position: player.ElementType, TeamID: player.Team, Price: float64(player.NowCost) / 10, TotalPoints: player.TotalPoints, Form: parseFloat(player.Form), Minutes: player.Minutes, Value: parseFloat(player.ValueForm), Status: player.Status, News: player.News, ChanceOfPlaying: player.Chance, GoalsScored: player.Goals, Assists: player.Assists, CleanSheets: player.CleanSheets, Bonus: player.Bonus, Saves: player.Saves, SelectedByPercent: parseFloat(player.SelectedByPercent), YellowCards: player.YellowCards, RedCards: player.RedCards, OwnGoals: player.OwnGoals, PenaltiesSaved: player.PenaltiesSaved, PenaltiesMissed: player.PenaltiesMissed, ExpectedGoals: parseFloat(player.ExpectedGoals), ExpectedAssists: parseFloat(player.ExpectedAssists), ExpectedMinutes: minutesSignal(player.Minutes), RecentReturns: float64(player.Goals+player.Assists) / 10})
 	}
 	normalizedFixtures := make([]Fixture, 0, len(fixtures))
 	for _, fixture := range fixtures {

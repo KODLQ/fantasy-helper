@@ -24,7 +24,7 @@ type Store struct {
 func NewStore() *Store {
 	s := &Store{
 		gameweeks: map[int]Gameweek{}, teams: map[int]Team{}, players: map[int]Player{}, history: map[int][]PlayerHistory{},
-		sync: SyncStatus{Status: "empty", CompletedStages: []string{}, FailedStages: []string{}, Freshness: Freshness{Status: "unavailable"}},
+		sync: SyncStatus{Status: "empty", CompletedStages: []string{}, FailedStages: []string{}, Freshness: Freshness{Status: "unavailable", State: "unavailable", Dataset: "public-fpl"}},
 	}
 	s.seedDemoData()
 	return s

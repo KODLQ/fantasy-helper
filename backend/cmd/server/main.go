@@ -43,6 +43,9 @@ func main() {
 		store.SaveSquad(squad)
 	}
 	source := app.NewFPLSource(cfg.FPLBaseURL)
+	source.SeasonID = cfg.SourceSeasonID
+	source.SeasonName = cfg.SourceSeasonName
+	source.AllowDiscovery = cfg.SourceDiscovery
 	api := app.NewAPI(store, source, func(ctx context.Context) bool {
 		return database.PingContext(ctx) == nil
 	}, logger, repository)

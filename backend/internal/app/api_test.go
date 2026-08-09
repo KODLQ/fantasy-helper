@@ -75,13 +75,49 @@ func TestDatasetSnapshotsUseCommonResponseEnvelope(t *testing.T) {
 		t.Fatalf("status = %d", recorder.Code)
 	}
 	var body struct {
-		Data []DatasetSnapshot `json:"data"`
-		Meta ResponseMeta      `json:"meta"`
+		Data struct {
+			Items []DatasetSnapshot `json:"items"`
+		} `json:"data"`
+		Meta ResponseMeta `json:"meta"`
 	}
 	if err := json.NewDecoder(recorder.Body).Decode(&body); err != nil {
 		t.Fatal(err)
 	}
-	if len(body.Data) != 1 || body.Meta.RequestID == "" || body.Meta.Freshness.Status == "" {
+	if len(body.Data.Items) != 1 || body.Meta.RequestID == "" || body.Meta.Freshness.Status == "" || body.Meta.Freshness.State == "" {
 		t.Fatalf("unexpected common response: %#v", body)
+	}
+}
+
+func TestDatasetSnapshotsUseCommonErrorEnvelope(t *testing.T) {
+	api := NewAPI(NewStore(), NewFPLSource("http://127.0.0.1:1"), nil, nil)
+	recorder := httptest.NewRecorder()
+	api.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/v1/data/snapshots", nil))
+	if recorder.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d", recorder.Code)
+	}
+	var body struct {
+		Error ResponseError `json:"error"`
+		Meta  ResponseMeta  `json:"meta"`
+	}
+	if err := json.NewDecoder(recorder.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Error.Code != "method_not_allowed" || body.Error.Retryable || body.Meta.RequestID == "" {
+		t.Fatalf("unexpected common error response: %#v", body)
+	}
+}
+
+func TestResponseMetaSupportsProvenancePaginationAndCoverage(t *testing.T) {
+	meta := ResponseMeta{RequestID: "req-test", Scope: Scope{SeasonID: 2026, Gameweek: 1}, Provenance: []string{"snapshot-1", "normalizer:fpl-public-v1"}, Pagination: &Pagination{Limit: 25, Offset: 0, Returned: 2, Total: 2}, Coverage: &Coverage{Complete: false, MissingIDs: []string{"player:99"}, Warning: "one source item is unavailable"}}
+	encoded, err := json.Marshal(meta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded ResponseMeta
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded.Provenance) != 2 || decoded.Pagination == nil || decoded.Pagination.Returned != 2 || decoded.Coverage == nil || decoded.Coverage.Complete {
+		t.Fatalf("metadata contract lost fields: %#v", decoded)
 	}
 }

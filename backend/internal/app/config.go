@@ -16,6 +16,9 @@ type Config struct {
 	Port             string
 	DatabaseURL      string
 	FPLBaseURL       string
+	SourceSeasonID   int
+	SourceSeasonName string
+	SourceDiscovery  bool
 	Environment      string
 	DatabaseMaxConns int
 	DatabaseMaxIdle  int
@@ -35,16 +38,43 @@ func LoadConfig() (Config, error) {
 	if maxConns < 1 || maxIdle < 0 || maxIdle > maxConns {
 		return Config{}, fmt.Errorf("invalid database pool limits: max=%d idle=%d", maxConns, maxIdle)
 	}
+	seasonID, err := envInt("FPL_SOURCE_SEASON_ID", 0)
+	if err != nil {
+		return Config{}, err
+	}
+	seasonName := os.Getenv("FPL_SOURCE_SEASON_NAME")
+	discovery := envBool("FPL_SOURCE_SEASON_DISCOVERY", true)
+	if (seasonID == 0) != (seasonName == "") {
+		return Config{}, fmt.Errorf("FPL_SOURCE_SEASON_ID and FPL_SOURCE_SEASON_NAME must be provided together")
+	}
+	if seasonID > 0 {
+		discovery = false
+	}
 	return Config{
 		Port:             configEnv("BACKEND_PORT", "8080"),
 		DatabaseURL:      os.Getenv("DATABASE_URL"),
 		FPLBaseURL:       configEnv("FPL_BASE_URL", "https://fantasy.premierleague.com/api"),
+		SourceSeasonID:   seasonID,
+		SourceSeasonName: seasonName,
+		SourceDiscovery:  discovery,
 		Environment:      configEnv("APP_ENV", "local"),
 		DatabaseMaxConns: maxConns,
 		DatabaseMaxIdle:  maxIdle,
 		DatabasePing:     envDuration("DB_PING_TIMEOUT", 3*time.Second),
 		ShutdownTimeout:  envDuration("SHUTDOWN_TIMEOUT", 10*time.Second),
 	}, nil
+}
+
+func envBool(key string, fallback bool) bool {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
 }
 
 func OpenDatabase(ctx context.Context, cfg Config) (*sql.DB, error) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -11,6 +12,8 @@ import (
 	"strings"
 	"time"
 )
+
+var errNoSyncWork = errors.New("no sync work available")
 
 type Repository interface {
 	EnsureSchema(context.Context) error
@@ -28,10 +31,20 @@ type TransactionalRepository interface {
 
 type DatasetSnapshotRepository interface {
 	ListDatasetSnapshots(context.Context, Scope) ([]DatasetSnapshot, error)
+	CreateDatasetSnapshot(context.Context, DatasetSnapshot) error
 }
 
 type SourcePayloadRepository interface {
 	RecordSourceObservation(context.Context, SourceObservation) error
+}
+
+type SyncWorkRepository interface {
+	StartSyncRun(context.Context, Scope, string) (int64, error)
+	FinishSyncRun(context.Context, int64, SyncStatus) error
+	EnqueueSyncWork(context.Context, int64, []SyncWorkItem) error
+	ClaimSyncWork(context.Context, int64) (SyncWorkItem, bool, error)
+	CompleteSyncWork(context.Context, int64) error
+	FailSyncWork(context.Context, int64, error, bool) error
 }
 
 type PostgresRepository struct {
@@ -49,6 +62,74 @@ func (r *PostgresRepository) RecordSourceObservation(ctx context.Context, observ
 		payload = string(observation.Payload)
 	}
 	_, err := r.db.ExecContext(ctx, `INSERT INTO source_payloads (endpoint, fetched_at, http_status, checksum, validation_state, schema_version, payload, diagnostic) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, observation.Endpoint, observation.FetchedAt, observation.HTTPStatus, observation.Checksum, observation.ValidationState, observation.SchemaVersion, payload, nullableString(observation.Diagnostic))
+	return err
+}
+
+func (r *PostgresRepository) StartSyncRun(ctx context.Context, scope Scope, correlationID string) (int64, error) {
+	var id int64
+	err := r.db.QueryRowContext(ctx, `INSERT INTO sync_runs (status, scope, season_source_id, gameweek_source_id, correlation_id) VALUES ('running',$1,$2,$3,$4) RETURNING id`, scope.Dataset, nullableInt(scope.SeasonID), nullableInt(scope.Gameweek), nullableString(correlationID)).Scan(&id)
+	if err != nil {
+		return 0, fmt.Errorf("start sync run: %w", err)
+	}
+	return id, nil
+}
+
+func (r *PostgresRepository) FinishSyncRun(ctx context.Context, runID int64, status SyncStatus) error {
+	checksum := nullableString(status.Checksum)
+	_, err := r.db.ExecContext(ctx, `UPDATE sync_runs SET status=$1, finished_at=$2, warning=$3, checksum=$4 WHERE id=$5`, status.Status, nullableTime(status.FinishedAt), nullableString(status.Warning), checksum, runID)
+	if err != nil {
+		return fmt.Errorf("finish sync run: %w", err)
+	}
+	return nil
+}
+
+func (r *PostgresRepository) EnqueueSyncWork(ctx context.Context, runID int64, items []SyncWorkItem) error {
+	return r.WithTransaction(ctx, func(tx *sql.Tx) error {
+		for _, item := range items {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO sync_work_items (sync_run_id, scope, natural_key, endpoint, season_source_id, gameweek_source_id, entity_source_id, status, attempts, available_at) VALUES ($1,$2,$3,$4,$5,$6,$7,'pending',0,NOW()) ON CONFLICT (sync_run_id, natural_key) DO NOTHING`, runID, item.Scope, item.NaturalKey, item.Endpoint, nullableInt(item.SeasonSourceID), nullableInt(item.GameweekSourceID), nullableInt(item.EntitySourceID)); err != nil {
+				return fmt.Errorf("enqueue sync work %s: %w", item.NaturalKey, err)
+			}
+		}
+		return nil
+	})
+}
+
+func (r *PostgresRepository) ClaimSyncWork(ctx context.Context, runID int64) (SyncWorkItem, bool, error) {
+	var item SyncWorkItem
+	err := r.WithTransaction(ctx, func(tx *sql.Tx) error {
+		row := tx.QueryRowContext(ctx, `SELECT id, scope, natural_key, endpoint, COALESCE(season_source_id,0), COALESCE(gameweek_source_id,0), COALESCE(entity_source_id,0), attempts, available_at, COALESCE(last_error,'') FROM sync_work_items WHERE sync_run_id=$1 AND status IN ('pending','retryable') AND available_at <= NOW() ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1`, runID)
+		if err := row.Scan(&item.ID, &item.Scope, &item.NaturalKey, &item.Endpoint, &item.SeasonSourceID, &item.GameweekSourceID, &item.EntitySourceID, &item.Attempts, &item.AvailableAt, &item.LastError); err != nil {
+			if err == sql.ErrNoRows {
+				return errNoSyncWork
+			}
+			return err
+		}
+		item.RunID = runID
+		item.Status = "running"
+		item.Attempts++
+		_, err := tx.ExecContext(ctx, `UPDATE sync_work_items SET status='running', attempts=$1, claimed_at=NOW() WHERE id=$2`, item.Attempts, item.ID)
+		return err
+	})
+	if err == errNoSyncWork {
+		return SyncWorkItem{}, false, nil
+	}
+	if err != nil {
+		return SyncWorkItem{}, false, fmt.Errorf("claim sync work: %w", err)
+	}
+	return item, true, nil
+}
+
+func (r *PostgresRepository) CompleteSyncWork(ctx context.Context, id int64) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE sync_work_items SET status='success', completed_at=NOW(), last_error=NULL WHERE id=$1`, id)
+	return err
+}
+
+func (r *PostgresRepository) FailSyncWork(ctx context.Context, id int64, failure error, retryable bool) error {
+	status := "failed"
+	if retryable {
+		status = "retryable"
+	}
+	_, err := r.db.ExecContext(ctx, `UPDATE sync_work_items SET status=$1, last_error=$2, available_at=CASE WHEN $1='retryable' THEN NOW() + LEAST((attempts * INTERVAL '5 seconds'), INTERVAL '5 minutes') ELSE available_at END WHERE id=$3`, status, failure.Error(), id)
 	return err
 }
 
@@ -123,7 +204,7 @@ func (r *PostgresRepository) LoadSnapshot(ctx context.Context) (Snapshot, bool, 
 }
 
 func (r *PostgresRepository) ListDatasetSnapshots(ctx context.Context, scope Scope) ([]DatasetSnapshot, error) {
-	query := `SELECT id::text, dataset, state, s.source_id, COALESCE(g.source_id, 0), source_fetched_at, normalized_at, normalizer_version, missing_inputs FROM dataset_snapshots d JOIN seasons s ON s.id=d.season_id LEFT JOIN gameweeks g ON g.id=d.gameweek_id WHERE ($1=0 OR s.source_id=$1) AND ($2=0 OR g.source_id=$2) AND ($3='' OR d.dataset=$3) ORDER BY d.normalized_at DESC`
+	query := `SELECT d.id::text, d.dataset, d.state, s.source_id, COALESCE(g.source_id, 0), d.source_fetched_at, d.normalized_at, d.normalizer_version, d.missing_inputs FROM dataset_snapshots d JOIN seasons s ON s.id=d.season_id LEFT JOIN gameweeks g ON g.id=d.gameweek_id WHERE ($1=0 OR s.source_id=$1) AND ($2=0 OR g.source_id=$2) AND ($3='' OR d.dataset=$3) ORDER BY d.normalized_at DESC`
 	rows, err := r.db.QueryContext(ctx, query, scope.SeasonID, scope.Gameweek, scope.Dataset)
 	if err != nil {
 		return nil, fmt.Errorf("list dataset snapshots: %w", err)
@@ -146,6 +227,34 @@ func (r *PostgresRepository) ListDatasetSnapshots(ctx context.Context, scope Sco
 		items = append(items, item)
 	}
 	return items, rows.Err()
+}
+
+func (r *PostgresRepository) CreateDatasetSnapshot(ctx context.Context, item DatasetSnapshot) error {
+	if item.ID == "" || item.Dataset == "" || item.SeasonID == 0 {
+		return fmt.Errorf("dataset snapshot requires id, dataset, and season ID")
+	}
+	if item.State == "" {
+		item.State = "provisional"
+	}
+	if item.NormalizerVersion == "" {
+		item.NormalizerVersion = "fpl-public-v1"
+	}
+	if item.NormalizedAt.IsZero() {
+		item.NormalizedAt = time.Now().UTC()
+	}
+	missing, err := json.Marshal(item.MissingInputs)
+	if err != nil {
+		return fmt.Errorf("encode snapshot missing inputs: %w", err)
+	}
+	var sourceFetched interface{}
+	if !item.SourceFetchedAt.IsZero() {
+		sourceFetched = item.SourceFetchedAt
+	}
+	_, err = r.db.ExecContext(ctx, `INSERT INTO dataset_snapshots (id, season_id, gameweek_id, dataset, state, source_fetched_at, normalized_at, normalizer_version, missing_inputs) VALUES ($1, (SELECT id FROM seasons WHERE source_id=$2 ORDER BY is_current DESC, updated_at DESC LIMIT 1), (SELECT g.id FROM gameweeks g JOIN seasons s ON s.id=g.season_id WHERE s.source_id=$2 AND g.source_id=$3 LIMIT 1), $4, $5, $6, $7, $8, $9) ON CONFLICT (id) DO UPDATE SET state=EXCLUDED.state, source_fetched_at=EXCLUDED.source_fetched_at, normalized_at=EXCLUDED.normalized_at, normalizer_version=EXCLUDED.normalizer_version, missing_inputs=EXCLUDED.missing_inputs`, item.ID, item.SeasonID, item.Gameweek, item.Dataset, item.State, sourceFetched, item.NormalizedAt, item.NormalizerVersion, missing)
+	if err != nil {
+		return fmt.Errorf("create dataset snapshot: %w", err)
+	}
+	return nil
 }
 
 func (r *PostgresRepository) currentSeasonID(ctx context.Context) (int64, error) {
@@ -478,7 +587,7 @@ func (r *PostgresRepository) RecordSyncStatus(ctx context.Context, status SyncSt
 	}
 	var runID int64
 	err := r.WithTransaction(ctx, func(tx *sql.Tx) error {
-		if err := tx.QueryRowContext(ctx, `INSERT INTO sync_runs (status, started_at, finished_at, warning, checksum) VALUES ($1,$2,$3,$4,$5) RETURNING id`, statusValue, nullableTime(status.StartedAt), nullableTime(status.FinishedAt), nullableString(status.Warning), nullableString(checksum)).Scan(&runID); err != nil {
+		if err := tx.QueryRowContext(ctx, `INSERT INTO sync_runs (status, scope, season_source_id, gameweek_source_id, started_at, finished_at, warning, checksum) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`, statusValue, status.Scope.Dataset, nullableInt(status.Scope.SeasonID), nullableInt(status.Scope.Gameweek), nullableTime(status.StartedAt), nullableTime(status.FinishedAt), nullableString(status.Warning), nullableString(checksum)).Scan(&runID); err != nil {
 			return err
 		}
 		for _, stage := range append(append([]string{}, status.CompletedStages...), status.FailedStages...) {
@@ -512,6 +621,12 @@ func contains(items []string, target string) bool {
 	return false
 }
 func nullableInt64(value int64) interface{} {
+	if value == 0 {
+		return nil
+	}
+	return value
+}
+func nullableInt(value int) interface{} {
 	if value == 0 {
 		return nil
 	}

@@ -26,9 +26,16 @@ type Gameweek struct {
 }
 
 type Team struct {
-	ID        int    `json:"id"`
-	Name      string `json:"name"`
-	ShortName string `json:"shortName"`
+	ID           int    `json:"id"`
+	Name         string `json:"name"`
+	ShortName    string `json:"shortName"`
+	Strength     int    `json:"strength,omitempty"`
+	StrengthHome int    `json:"strengthOverallHome,omitempty"`
+	StrengthAway int    `json:"strengthOverallAway,omitempty"`
+	AttackHome   int    `json:"strengthAttackHome,omitempty"`
+	AttackAway   int    `json:"strengthAttackAway,omitempty"`
+	DefenceHome  int    `json:"strengthDefenceHome,omitempty"`
+	DefenceAway  int    `json:"strengthDefenceAway,omitempty"`
 }
 
 type Fixture struct {
@@ -45,27 +52,35 @@ type Fixture struct {
 }
 
 type Player struct {
-	ID              int     `json:"id"`
-	FirstName       string  `json:"firstName"`
-	SecondName      string  `json:"secondName"`
-	WebName         string  `json:"webName"`
-	Position        int     `json:"position"`
-	TeamID          int     `json:"teamId"`
-	Price           float64 `json:"price"`
-	TotalPoints     int     `json:"totalPoints"`
-	Form            float64 `json:"form"`
-	Minutes         int     `json:"minutes"`
-	Value           float64 `json:"value"`
-	Status          string  `json:"status"`
-	News            string  `json:"news"`
-	ChanceOfPlaying *int    `json:"chanceOfPlayingNextRound,omitempty"`
-	GoalsScored     int     `json:"goalsScored"`
-	Assists         int     `json:"assists"`
-	CleanSheets     int     `json:"cleanSheets"`
-	Bonus           int     `json:"bonus"`
-	Saves           int     `json:"saves"`
-	ExpectedMinutes float64 `json:"expectedMinutes"`
-	RecentReturns   float64 `json:"recentReturns"`
+	ID                int     `json:"id"`
+	FirstName         string  `json:"firstName"`
+	SecondName        string  `json:"secondName"`
+	WebName           string  `json:"webName"`
+	Position          int     `json:"position"`
+	TeamID            int     `json:"teamId"`
+	Price             float64 `json:"price"`
+	TotalPoints       int     `json:"totalPoints"`
+	Form              float64 `json:"form"`
+	Minutes           int     `json:"minutes"`
+	Value             float64 `json:"value"`
+	Status            string  `json:"status"`
+	News              string  `json:"news"`
+	ChanceOfPlaying   *int    `json:"chanceOfPlayingNextRound,omitempty"`
+	GoalsScored       int     `json:"goalsScored"`
+	Assists           int     `json:"assists"`
+	CleanSheets       int     `json:"cleanSheets"`
+	Bonus             int     `json:"bonus"`
+	Saves             int     `json:"saves"`
+	SelectedByPercent float64 `json:"selectedByPercent,omitempty"`
+	YellowCards       int     `json:"yellowCards,omitempty"`
+	RedCards          int     `json:"redCards,omitempty"`
+	OwnGoals          int     `json:"ownGoals,omitempty"`
+	PenaltiesSaved    int     `json:"penaltiesSaved,omitempty"`
+	PenaltiesMissed   int     `json:"penaltiesMissed,omitempty"`
+	ExpectedGoals     float64 `json:"expectedGoals,omitempty"`
+	ExpectedAssists   float64 `json:"expectedAssists,omitempty"`
+	ExpectedMinutes   float64 `json:"expectedMinutes"`
+	RecentReturns     float64 `json:"recentReturns"`
 }
 
 type PlayerHistory struct {
@@ -80,6 +95,14 @@ type PlayerHistory struct {
 }
 
 type Freshness struct {
+	Dataset            string    `json:"dataset,omitempty"`
+	State              string    `json:"state,omitempty"`
+	SnapshotIDs        []string  `json:"snapshotIds,omitempty"`
+	SourceFetchedAt    time.Time `json:"sourceFetchedAt,omitempty"`
+	NormalizedAt       time.Time `json:"normalizedAt,omitempty"`
+	NormalizerVersion  string    `json:"normalizerVersion,omitempty"`
+	MissingInputs      []string  `json:"missingInputs,omitempty"`
+	Warnings           []string  `json:"warnings,omitempty"`
 	Status             string    `json:"status"`
 	LastSuccessfulSync time.Time `json:"lastSuccessfulSync,omitempty"`
 	Warning            string    `json:"warning,omitempty"`
@@ -88,6 +111,7 @@ type Freshness struct {
 
 type SyncStatus struct {
 	Status          string    `json:"status"`
+	RunID           int64     `json:"runId,omitempty"`
 	Scope           Scope     `json:"scope,omitempty"`
 	CurrentStage    string    `json:"currentStage,omitempty"`
 	CompletedStages []string  `json:"completedStages"`
@@ -99,10 +123,48 @@ type SyncStatus struct {
 	Freshness       Freshness `json:"freshness"`
 }
 
+type SyncWorkItem struct {
+	ID               int64     `json:"id,omitempty"`
+	RunID            int64     `json:"runId"`
+	Scope            string    `json:"scope"`
+	NaturalKey       string    `json:"naturalKey"`
+	Endpoint         string    `json:"endpoint"`
+	SeasonSourceID   int       `json:"seasonId,omitempty"`
+	GameweekSourceID int       `json:"gameweek,omitempty"`
+	EntitySourceID   int       `json:"entityId,omitempty"`
+	Status           string    `json:"status"`
+	Attempts         int       `json:"attempts"`
+	AvailableAt      time.Time `json:"availableAt"`
+	LastError        string    `json:"lastError,omitempty"`
+}
+
 type ResponseMeta struct {
-	RequestID string    `json:"requestId"`
-	Scope     Scope     `json:"scope,omitempty"`
-	Freshness Freshness `json:"freshness"`
+	RequestID  string      `json:"requestId"`
+	Scope      Scope       `json:"scope,omitempty"`
+	Freshness  Freshness   `json:"freshness,omitempty"`
+	Provenance []string    `json:"provenance,omitempty"`
+	Pagination *Pagination `json:"pagination,omitempty"`
+	Coverage   *Coverage   `json:"coverage,omitempty"`
+}
+
+type Pagination struct {
+	Limit    int `json:"limit"`
+	Offset   int `json:"offset"`
+	Returned int `json:"returned"`
+	Total    int `json:"total,omitempty"`
+}
+
+type Coverage struct {
+	Complete   bool     `json:"complete"`
+	MissingIDs []string `json:"missingIds,omitempty"`
+	Warning    string   `json:"warning,omitempty"`
+}
+
+type ResponseError struct {
+	Code      string      `json:"code"`
+	Message   string      `json:"message"`
+	Retryable bool        `json:"retryable"`
+	Details   interface{} `json:"details,omitempty"`
 }
 
 type Scope struct {

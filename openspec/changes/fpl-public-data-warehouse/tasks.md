@@ -6,10 +6,10 @@
 - [x] 1.4 Add player snapshot, player gameweek fact, fixture-stat, and player-future-fixture tables.
 - [x] 1.5 Add constraints and indexes for season/gameweek/player/fixture natural keys and analysis queries.
 - [x] 1.6 Add repository interfaces, transaction helpers, upsert helpers, and integration tests against PostgreSQL.
-- [ ] 1.7 Add dataset snapshot identity, completeness state, normalizer version, and source-time columns/contracts.
+- [x] 1.7 Add dataset snapshot identity, completeness state, normalizer version, and source-time columns/contracts.
 - [x] 1.8 Add migration comments and repository documentation for every natural key and foreign-key relationship.
 - [x] 1.9 Add migration-runner ownership, readiness gating, file-derived verification, and unsafe-database-target protection.
-- [ ] 1.10 Add shared response-envelope, error, freshness, provenance, pagination, and compatibility-contract tests.
+- [x] 1.10 Add shared response-envelope, error, freshness, provenance, pagination, and compatibility-contract tests.
 
 ## 2. Source adapter coverage
 
@@ -20,7 +20,7 @@
 - [x] 2.5 Store source payloads and checksums for every stage with bounded diagnostics.
 - [ ] 2.6 Add adapter fixtures and schema-validation tests for complete, partial, malformed, 429, and 5xx responses.
 - [x] 2.7 Publish typed source contracts for bootstrap, fixtures, event-live, and element-summary; retain unknown fields and test numeric/null/type changes.
-- [ ] 2.8 Add explicit season ID/name configuration and tests proving no active season is hard-coded.
+- [x] 2.8 Add explicit season ID/name configuration and tests proving no active season is hard-coded.
 
 ## 3. Sync orchestration and recovery
 
@@ -30,7 +30,7 @@
 - [ ] 3.4 Implement idempotent canonical upserts and last-known-good retention for failed work.
 - [ ] 3.5 Add current-gameweek incremental refresh and completed-gameweek finalization.
 - [ ] 3.6 Add manual sync controls and an in-process scheduler configuration.
-- [ ] 3.7 Add scope locks and duplicate-run prevention for equivalent season/gameweek datasets.
+- [x] 3.7 Add scope locks and duplicate-run prevention for equivalent season/gameweek datasets.
 - [ ] 3.8 Add configurable timeout, retry, jitter, `Retry-After`, and per-host concurrency behavior with metrics.
 - [ ] 3.9 Add catalog, fixture, live, finalization, and reconciliation cadence policies with scheduler tests.
 - [ ] 3.10 Add coordinator cancellation, shutdown wait, correlation IDs, sync metrics, and duplicate-scope locking.
@@ -51,7 +51,7 @@
 - [ ] 5.1 Add migration verification, repository idempotency, transaction rollback, and restart-resume tests.
 - [ ] 5.2 Add full-sync integration tests using sanitized source fixtures and a fake source server.
 - [ ] 5.3 Compare player counts, fixture counts, gameweek facts, and selected metrics before/after the new pipeline.
-- [ ] 5.4 Update README/configuration documentation for PostgreSQL-backed sync, retention, scheduling, and troubleshooting.
+- [x] 5.4 Update README/configuration documentation for PostgreSQL-backed sync, retention, scheduling, and troubleshooting.
 - [ ] 5.5 Run unit, integration, frontend, and browser smoke tests against the database-backed stack.
 - [ ] 5.6 Add tests proving historical/current snapshot isolation and actual/partial/stale/unavailable state labels.
 - [ ] 5.7 Add retention cleanup tests that preserve canonical facts and active reproducibility references.

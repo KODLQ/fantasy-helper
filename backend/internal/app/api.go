@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	cryptorand "crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -81,6 +83,9 @@ func writeError(w http.ResponseWriter, status int, code, message string, details
 func writeEnvelope(w http.ResponseWriter, status int, requestID string, scope Scope, freshness Freshness, data interface{}) {
 	writeJSON(w, status, map[string]interface{}{"data": data, "meta": ResponseMeta{RequestID: requestID, Scope: scope, Freshness: freshness}})
 }
+func writeContractError(w http.ResponseWriter, status int, requestID, code, message string, retryable bool, details interface{}) {
+	writeJSON(w, status, map[string]interface{}{"error": ResponseError{Code: code, Message: message, Retryable: retryable, Details: details}, "meta": ResponseMeta{RequestID: requestID}})
+}
 func parseInt(value string, fallback int) int {
 	n, err := strconv.Atoi(value)
 	if err != nil {
@@ -102,19 +107,22 @@ func (a *API) syncStatus(w http.ResponseWriter, r *http.Request) {
 }
 func (a *API) dataSnapshots(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]interface{}{"error": map[string]interface{}{"code": "method_not_allowed", "message": "Use GET for dataset snapshots."}, "meta": ResponseMeta{RequestID: w.Header().Get("X-Request-ID")}})
+		writeContractError(w, http.StatusMethodNotAllowed, w.Header().Get("X-Request-ID"), "method_not_allowed", "Use GET for dataset snapshots.", false, nil)
 		return
 	}
 	query := r.URL.Query()
 	scope := Scope{SeasonID: parseInt(query.Get("seasonId"), 0), Gameweek: parseInt(query.Get("gameweek"), 0), Dataset: query.Get("dataset")}
 	if snapshotRepository, ok := a.Repository.(DatasetSnapshotRepository); ok {
 		if snapshots, err := snapshotRepository.ListDatasetSnapshots(r.Context(), scope); err == nil {
-			writeEnvelope(w, http.StatusOK, w.Header().Get("X-Request-ID"), scope, a.Store.Freshness(), snapshots)
+			writeEnvelope(w, http.StatusOK, w.Header().Get("X-Request-ID"), scope, a.Store.Freshness(), map[string]interface{}{"items": snapshots})
 			return
 		}
 	}
 	status := a.Store.SyncStatus()
-	state := status.Freshness.Status
+	state := status.Freshness.State
+	if state == "" {
+		state = status.Freshness.Status
+	}
 	if state == "fresh" {
 		state = "actual"
 	} else if state == "unavailable" || state == "" {
@@ -126,7 +134,11 @@ func (a *API) dataSnapshots(w http.ResponseWriter, r *http.Request) {
 	if updated.IsZero() {
 		updated = status.FinishedAt
 	}
-	item := DatasetSnapshot{ID: status.Checksum, Dataset: "public-fpl", State: state, SeasonID: 1, NormalizedAt: updated, NormalizerVersion: "demo-v1", MissingInputs: append([]string{}, status.FailedStages...)}
+	item := DatasetSnapshot{ID: status.Checksum, Dataset: "public-fpl", State: state, SeasonID: 1, SourceFetchedAt: status.Freshness.SourceFetchedAt, NormalizedAt: updated, NormalizerVersion: status.Freshness.NormalizerVersion, MissingInputs: append([]string{}, status.Freshness.MissingInputs...)}
+	if item.NormalizerVersion == "" {
+		item.NormalizerVersion = "demo-v1"
+	}
+	item.MissingInputs = append(item.MissingInputs, status.FailedStages...)
 	if item.ID == "" {
 		item.ID = "unavailable"
 	}
@@ -136,7 +148,7 @@ func (a *API) dataSnapshots(w http.ResponseWriter, r *http.Request) {
 	if scope.Dataset == "" {
 		scope.Dataset = "public-fpl"
 	}
-	writeEnvelope(w, http.StatusOK, w.Header().Get("X-Request-ID"), scope, status.Freshness, []DatasetSnapshot{item})
+	writeEnvelope(w, http.StatusOK, w.Header().Get("X-Request-ID"), scope, status.Freshness, map[string]interface{}{"items": []DatasetSnapshot{item}})
 }
 func (a *API) sync(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -167,14 +179,22 @@ func (a *API) sync(w http.ResponseWriter, r *http.Request) {
 	started := time.Now().UTC()
 	scope := Scope{SeasonID: request.SeasonID, Gameweek: request.Gameweek, Dataset: request.Scope}
 	running := SyncStatus{Status: "running", Scope: scope, CurrentStage: "snapshot", StartedAt: started, CompletedStages: []string{}, FailedStages: []string{}, Freshness: a.Store.Freshness()}
+	if syncRepository, ok := a.Repository.(SyncWorkRepository); ok {
+		runID, err := syncRepository.StartSyncRun(r.Context(), scope, w.Header().Get("X-Request-ID"))
+		if err != nil {
+			writeError(w, http.StatusConflict, "sync_scope_unavailable", "An equivalent sync scope is already running or could not be started.", nil)
+			return
+		}
+		running.RunID = runID
+	}
 	a.Store.SetSyncStatus(running)
-	if a.Repository != nil {
+	if a.Repository != nil && running.RunID == 0 {
 		_ = a.Repository.RecordSyncStatus(r.Context(), running)
 	}
-	go a.runSync(scope)
+	go a.runSync(scope, running.RunID)
 	writeJSON(w, http.StatusAccepted, a.Store.SyncStatus())
 }
-func (a *API) runSync(scope Scope) {
+func (a *API) runSync(scope Scope, runID int64) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	status := a.Store.SyncStatus()
@@ -187,14 +207,29 @@ func (a *API) runSync(scope Scope) {
 		status.FinishedAt = time.Now().UTC()
 		a.Store.SetSyncStatus(status)
 		if a.Repository != nil {
-			_ = a.Repository.RecordSyncStatus(ctx, status)
+			a.persistSyncStatus(ctx, status)
 		}
 		return
 	}
 	status.CompletedStages = append(status.CompletedStages, "snapshot")
 	status.CurrentStage = "player-history"
 	a.Store.SetSyncStatus(status)
-	histories, failedStages := a.syncHistories(ctx, players)
+	if syncRepository, ok := a.Repository.(SyncWorkRepository); ok && runID > 0 {
+		items := make([]SyncWorkItem, 0, len(players))
+		for _, player := range players {
+			items = append(items, SyncWorkItem{Scope: "player-history", NaturalKey: fmt.Sprintf("player-history:%d:%d", season.ID, player.ID), Endpoint: fmt.Sprintf("/element-summary/%d/", player.ID), SeasonSourceID: season.ID, EntitySourceID: player.ID})
+		}
+		if err := syncRepository.EnqueueSyncWork(ctx, runID, items); err != nil {
+			status.Status = "failed"
+			status.Warning = fmt.Sprintf("sync work queue persistence failed: %v", err)
+			status.FailedStages = append(status.FailedStages, "work-queue")
+			status.FinishedAt = time.Now().UTC()
+			a.Store.SetSyncStatus(status)
+			a.persistSyncStatus(ctx, status)
+			return
+		}
+	}
+	histories, failedStages := a.syncHistories(ctx, players, runID)
 	status.FailedStages = append(status.FailedStages, failedStages...)
 	failures := len(failedStages)
 	snapshot := Snapshot{Season: season, Gameweeks: weeks, Teams: teams, Players: players, Fixtures: fixtures, Histories: histories, Checksum: checksum}
@@ -205,7 +240,23 @@ func (a *API) runSync(scope Scope) {
 			status.FailedStages = append(status.FailedStages, "database")
 			status.FinishedAt = time.Now().UTC()
 			a.Store.SetSyncStatus(status)
-			_ = a.Repository.RecordSyncStatus(ctx, status)
+			a.persistSyncStatus(ctx, status)
+			return
+		}
+	}
+	snapshotID := newSnapshotID()
+	if snapshotRepository, ok := a.Repository.(DatasetSnapshotRepository); ok {
+		state := "actual"
+		if len(failedStages) > 0 {
+			state = "partial"
+		}
+		if err := snapshotRepository.CreateDatasetSnapshot(ctx, DatasetSnapshot{ID: snapshotID, Dataset: "public-fpl", State: state, SeasonID: season.ID, NormalizedAt: time.Now().UTC(), SourceFetchedAt: time.Now().UTC(), NormalizerVersion: "fpl-public-v1", MissingInputs: append([]string{}, failedStages...)}); err != nil {
+			status.Status = "failed"
+			status.Warning = fmt.Sprintf("dataset snapshot persistence failed: %v", err)
+			status.FailedStages = append(status.FailedStages, "dataset-snapshot")
+			status.FinishedAt = time.Now().UTC()
+			a.Store.SetSyncStatus(status)
+			a.persistSyncStatus(ctx, status)
 			return
 		}
 	}
@@ -213,7 +264,11 @@ func (a *API) runSync(scope Scope) {
 	status.CurrentStage = ""
 	status.FinishedAt = time.Now().UTC()
 	status.Checksum = checksum
-	status.Freshness = Freshness{Status: "fresh", LastSuccessfulSync: status.FinishedAt, SnapshotAt: status.FinishedAt}
+	state := "actual"
+	if failures > 0 {
+		state = "partial"
+	}
+	status.Freshness = Freshness{Status: "fresh", State: state, Dataset: "public-fpl", SnapshotIDs: []string{snapshotID}, LastSuccessfulSync: status.FinishedAt, SnapshotAt: status.FinishedAt, SourceFetchedAt: status.FinishedAt, NormalizedAt: status.FinishedAt, NormalizerVersion: "fpl-public-v1", MissingInputs: append([]string{}, failedStages...)}
 	if failures > 0 {
 		status.Status = "partial"
 		status.Warning = fmt.Sprintf("%d player history requests failed; last known good data was retained where available", failures)
@@ -225,8 +280,32 @@ func (a *API) runSync(scope Scope) {
 	_ = checksum
 	a.Store.SetSyncStatus(status)
 	if a.Repository != nil {
-		_ = a.Repository.RecordSyncStatus(ctx, status)
+		a.persistSyncStatus(ctx, status)
 	}
+}
+
+func (a *API) persistSyncStatus(ctx context.Context, status SyncStatus) {
+	if a.Repository == nil {
+		return
+	}
+	if status.RunID > 0 {
+		if syncRepository, ok := a.Repository.(SyncWorkRepository); ok {
+			_ = syncRepository.FinishSyncRun(ctx, status.RunID, status)
+			return
+		}
+	}
+	_ = a.Repository.RecordSyncStatus(ctx, status)
+}
+
+func newSnapshotID() string {
+	var value [16]byte
+	if _, err := cryptorand.Read(value[:]); err != nil {
+		return fmt.Sprintf("snapshot-%d", time.Now().UnixNano())
+	}
+	value[6] = (value[6] & 0x0f) | 0x40
+	value[8] = (value[8] & 0x3f) | 0x80
+	encoded := hex.EncodeToString(value[:])
+	return encoded[0:8] + "-" + encoded[8:12] + "-" + encoded[12:16] + "-" + encoded[16:20] + "-" + encoded[20:32]
 }
 
 type historyResult struct {
@@ -235,7 +314,10 @@ type historyResult struct {
 	err      error
 }
 
-func (a *API) syncHistories(ctx context.Context, players []Player) (map[int][]PlayerHistory, []string) {
+func (a *API) syncHistories(ctx context.Context, players []Player, runID int64) (map[int][]PlayerHistory, []string) {
+	if syncRepository, ok := a.Repository.(SyncWorkRepository); ok && runID > 0 {
+		return a.syncQueuedHistories(ctx, syncRepository, runID)
+	}
 	workers := 6
 	if len(players) < workers {
 		workers = len(players)
@@ -264,6 +346,43 @@ func (a *API) syncHistories(ctx context.Context, players []Player) (map[int][]Pl
 		waitGroup.Wait()
 		close(results)
 	}()
+	histories := map[int][]PlayerHistory{}
+	failedStages := []string{}
+	for result := range results {
+		if result.err != nil {
+			failedStages = append(failedStages, fmt.Sprintf("player-history:%d", result.playerID))
+			continue
+		}
+		histories[result.playerID] = result.history
+	}
+	return histories, failedStages
+}
+
+func (a *API) syncQueuedHistories(ctx context.Context, repository SyncWorkRepository, runID int64) (map[int][]PlayerHistory, []string) {
+	workers := 6
+	results := make(chan historyResult, workers)
+	var waitGroup sync.WaitGroup
+	for worker := 0; worker < workers; worker++ {
+		waitGroup.Add(1)
+		go func() {
+			defer waitGroup.Done()
+			for {
+				item, ok, err := repository.ClaimSyncWork(ctx, runID)
+				if err != nil || !ok {
+					return
+				}
+				history, _, sourceErr := a.Source.PlayerHistory(ctx, item.EntitySourceID)
+				if sourceErr != nil {
+					_ = repository.FailSyncWork(ctx, item.ID, sourceErr, true)
+					results <- historyResult{playerID: item.EntitySourceID, err: sourceErr}
+					continue
+				}
+				_ = repository.CompleteSyncWork(ctx, item.ID)
+				results <- historyResult{playerID: item.EntitySourceID, history: history}
+			}
+		}()
+	}
+	go func() { waitGroup.Wait(); close(results) }()
 	histories := map[int][]PlayerHistory{}
 	failedStages := []string{}
 	for result := range results {

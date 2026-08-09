@@ -58,6 +58,13 @@ func TestPostgresRepositoryPersistence(t *testing.T) {
 	if seasonCount != 1 || playerCount != len(snapshot.Players) {
 		t.Fatalf("upsert duplicated data: seasons=%d players=%d", seasonCount, playerCount)
 	}
+	if err := repository.CreateDatasetSnapshot(ctx, DatasetSnapshot{ID: newSnapshotID(), Dataset: "player-gameweek", State: "actual", SeasonID: snapshot.Season.ID, Gameweek: 1, SourceFetchedAt: time.Now().UTC(), NormalizedAt: time.Now().UTC(), NormalizerVersion: "fpl-public-v1"}); err != nil {
+		t.Fatal(err)
+	}
+	snapshots, err := repository.ListDatasetSnapshots(ctx, Scope{SeasonID: snapshot.Season.ID, Gameweek: 1, Dataset: "player-gameweek"})
+	if err != nil || len(snapshots) != 1 || snapshots[0].State != "actual" || snapshots[0].NormalizerVersion != "fpl-public-v1" {
+		t.Fatalf("unexpected dataset snapshots: %#v err=%v", snapshots, err)
+	}
 	loaded, ok, err := repository.LoadSnapshot(ctx)
 	if err != nil || !ok {
 		t.Fatalf("load snapshot: ok=%v err=%v", ok, err)
@@ -140,4 +147,52 @@ func assertDisposableTestDatabase(dsn string) error {
 		return fmt.Errorf("TEST_DATABASE_URL must include a host")
 	}
 	return nil
+}
+
+func TestPostgresSyncWorkQueueClaimsIdempotently(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("set TEST_DATABASE_URL to run PostgreSQL persistence tests")
+	}
+	if err := assertDisposableTestDatabase(dsn); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	database, err := OpenDatabase(ctx, Config{DatabaseURL: dsn, DatabaseMaxConns: 4, DatabaseMaxIdle: 2, DatabasePing: 3 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	repository := NewPostgresRepository(database, nil)
+	if err := repository.EnsureSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	scope := Scope{Dataset: fmt.Sprintf("test-work-queue-%d", time.Now().UnixNano())}
+	runID, err := repository.StartSyncRun(ctx, scope, "test-request")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, duplicateErr := repository.StartSyncRun(ctx, scope, "duplicate-request"); duplicateErr == nil {
+		t.Fatal("expected duplicate active sync scope to be rejected")
+	}
+	if err := repository.EnqueueSyncWork(ctx, runID, []SyncWorkItem{{Scope: "player-history", NaturalKey: "test:1", Endpoint: "/element-summary/1/", EntitySourceID: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	claimed, ok, err := repository.ClaimSyncWork(ctx, runID)
+	if err != nil || !ok || claimed.Attempts != 1 {
+		t.Fatalf("unexpected claim: %#v ok=%v err=%v", claimed, ok, err)
+	}
+	if err := repository.CompleteSyncWork(ctx, claimed.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := repository.ClaimSyncWork(ctx, runID); err != nil || ok {
+		t.Fatalf("completed work was claimable: ok=%v err=%v", ok, err)
+	}
+	if err := repository.FinishSyncRun(ctx, runID, SyncStatus{Status: "success", FinishedAt: time.Now().UTC(), Scope: scope}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.StartSyncRun(ctx, scope, "after-completion"); err != nil {
+		t.Fatalf("completed scope remained locked: %v", err)
+	}
 }
