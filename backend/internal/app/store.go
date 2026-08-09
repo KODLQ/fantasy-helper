@@ -22,12 +22,16 @@ type Store struct {
 }
 
 func NewStore() *Store {
-	s := &Store{
+	s := newEmptyStore()
+	s.seedDemoData()
+	return s
+}
+
+func newEmptyStore() *Store {
+	return &Store{
 		gameweeks: map[int]Gameweek{}, teams: map[int]Team{}, players: map[int]Player{}, history: map[int][]PlayerHistory{},
 		sync: SyncStatus{Status: "empty", CompletedStages: []string{}, FailedStages: []string{}, Freshness: Freshness{Status: "unavailable", State: "unavailable", Dataset: "public-fpl"}},
 	}
-	s.seedDemoData()
-	return s
 }
 
 func (s *Store) seedDemoData() {

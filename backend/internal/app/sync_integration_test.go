@@ -107,4 +107,10 @@ func TestFullSyncPersistsSourceParityThroughPostgresQueue(t *testing.T) {
 	if status.RunID != runID || status.Scope != scope {
 		t.Fatal(fmt.Sprintf("sync identity changed: %#v", status))
 	}
+	readAPI := NewAPI(NewStore(), NewFPLSourceWithSeason(server.URL, 2026, "2026/27"), nil, nil, repository)
+	response := httptest.NewRecorder()
+	readAPI.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/players/10", nil))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"webName":"One"`) || strings.Contains(response.Body.String(), `"webName":"Fox"`) {
+		t.Fatalf("production player read did not use PostgreSQL: status=%d body=%s", response.Code, response.Body.String())
+	}
 }

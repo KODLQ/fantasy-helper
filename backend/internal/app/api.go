@@ -755,23 +755,41 @@ func (a *API) compare(w http.ResponseWriter, r *http.Request) {
 	items := []map[string]interface{}{}
 	for _, raw := range ids {
 		id := parseInt(raw, 0)
-		player, ok := a.Store.Player(id)
-		if !ok {
+		if repository, ok := a.Repository.(ResearchReadRepository); ok {
+			detail, found, err := repository.LoadPlayerDetail(r.Context(), id)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "comparison_unavailable", "Player comparison is temporarily unavailable.", nil)
+				return
+			}
+			if !found {
+				writeError(w, http.StatusNotFound, "player_not_found", "One of the selected players was not found.", nil)
+				return
+			}
+			items = append(items, map[string]interface{}{"player": detail.Player, "team": detail.Team, "history": detail.History})
+			continue
+		}
+		player, found := a.Store.Player(id)
+		if !found {
 			writeError(w, http.StatusNotFound, "player_not_found", "One of the selected players was not found.", nil)
 			return
 		}
 		items = append(items, map[string]interface{}{"player": player, "team": mustTeam(a.Store.Team(player.TeamID)), "history": a.Store.History(id)})
 	}
-	freshness := a.Store.Freshness()
+	freshness := a.requestFreshness(r.Context(), Scope{Dataset: "public-fpl"})
 	writeEnvelope(w, http.StatusOK, w.Header().Get("X-Request-ID"), Scope{Dataset: "public-fpl"}, freshness, map[string]interface{}{"items": items, "freshness": freshness})
 }
 func mustTeam(team Team, ok bool) Team { return team }
 func (a *API) squad(w http.ResponseWriter, r *http.Request) {
+	domain, err := a.requestDomainStore(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "planning_unavailable", "Squad planning data is temporarily unavailable.", nil)
+		return
+	}
 	switch r.Method {
 	case http.MethodGet:
-		squad := a.Store.EnrichSquad(a.Store.GetSquad())
-		squad.Validation = a.Store.ValidatePlan(squad)
-		freshness := a.Store.Freshness()
+		squad := domain.EnrichSquad(domain.GetSquad())
+		squad.Validation = domain.ValidatePlan(squad)
+		freshness := a.requestFreshness(r.Context(), Scope{Dataset: "public-fpl"})
 		writeEnvelope(w, http.StatusOK, w.Header().Get("X-Request-ID"), Scope{Dataset: "public-fpl"}, freshness, squad)
 	case http.MethodPut:
 		var input Squad
@@ -780,8 +798,8 @@ func (a *API) squad(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		input.Budget = 100
-		input = a.Store.EnrichSquad(input)
-		errors := a.Store.ValidatePlan(input)
+		input = domain.EnrichSquad(input)
+		errors := domain.ValidatePlan(input)
 		if len(errors) > 0 {
 			writeError(w, http.StatusUnprocessableEntity, "validation_failed", "Squad update failed validation.", errors)
 			return
@@ -793,8 +811,8 @@ func (a *API) squad(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		a.Store.SaveSquad(input)
-		freshness := a.Store.Freshness()
-		writeEnvelope(w, http.StatusOK, w.Header().Get("X-Request-ID"), Scope{Dataset: "public-fpl"}, freshness, a.Store.EnrichSquad(input))
+		freshness := a.requestFreshness(r.Context(), Scope{Dataset: "public-fpl"})
+		writeEnvelope(w, http.StatusOK, w.Header().Get("X-Request-ID"), Scope{Dataset: "public-fpl"}, freshness, domain.EnrichSquad(input))
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Use GET or PUT for the squad.", nil)
 	}
@@ -810,11 +828,37 @@ func (a *API) recommendations(w http.ResponseWriter, r *http.Request) {
 	if r.Body != nil {
 		_ = json.NewDecoder(r.Body).Decode(&body)
 	}
-	recommendation, errors := a.Store.Recommend(a.Store.GetSquad(), body.Weights)
+	domain, err := a.requestDomainStore(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "recommendation_unavailable", "Recommendation data is temporarily unavailable.", nil)
+		return
+	}
+	recommendation, errors := domain.Recommend(domain.GetSquad(), body.Weights)
 	if len(errors) > 0 {
 		writeError(w, http.StatusUnprocessableEntity, "recommendation_failed", "Recommendation could not be generated.", errors)
 		return
 	}
-	freshness := a.Store.Freshness()
+	freshness := a.requestFreshness(r.Context(), Scope{Dataset: "public-fpl"})
 	writeEnvelope(w, http.StatusOK, w.Header().Get("X-Request-ID"), Scope{Dataset: "public-fpl"}, freshness, map[string]interface{}{"recommendation": recommendation, "freshness": freshness})
+}
+
+func (a *API) requestDomainStore(ctx context.Context) (*Store, error) {
+	if a.Repository == nil {
+		return a.Store, nil
+	}
+	snapshot, found, err := a.Repository.LoadSnapshot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, fmt.Errorf("no persisted public snapshot is available")
+	}
+	domain := newEmptyStore()
+	domain.ApplySnapshot(snapshot.Season, snapshot.Gameweeks, snapshot.Teams, snapshot.Players, snapshot.Fixtures, snapshot.Histories)
+	if squad, found, err := a.Repository.LoadSquad(ctx); err != nil {
+		return nil, err
+	} else if found {
+		domain.SaveSquad(squad)
+	}
+	return domain, nil
 }
