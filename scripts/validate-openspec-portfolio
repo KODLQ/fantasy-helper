@@ -1,0 +1,112 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require "yaml"
+require "open3"
+require "set"
+require "date"
+
+ROOT = File.expand_path("..", __dir__)
+OPEN_SPEC_ROOT = File.join(ROOT, "openspec")
+CHANGES_ROOT = File.join(OPEN_SPEC_ROOT, "changes")
+
+def fail_check(message)
+  warn "OpenSpec portfolio validation failed: #{message}"
+  exit 1
+end
+
+def load_yaml(path)
+  YAML.safe_load(File.read(path), permitted_classes: [Date], aliases: false) || {}
+rescue StandardError => e
+  fail_check("cannot parse #{path}: #{e.message}")
+end
+
+dependencies_path = File.join(OPEN_SPEC_ROOT, "dependencies.yaml")
+formulas_path = File.join(OPEN_SPEC_ROOT, "formulas.yaml")
+rules_path = File.join(OPEN_SPEC_ROOT, "fpl-rules.yaml")
+fail_check("missing openspec/dependencies.yaml") unless File.file?(dependencies_path)
+fail_check("missing openspec/formulas.yaml") unless File.file?(formulas_path)
+fail_check("missing openspec/fpl-rules.yaml") unless File.file?(rules_path)
+
+registry = load_yaml(dependencies_path)
+changes = registry.fetch("changes")
+order = registry.fetch("ci").fetch("order")
+change_names = Dir.children(CHANGES_ROOT).select { |name| File.directory?(File.join(CHANGES_ROOT, name)) }.to_set
+
+fail_check("dependency order contains duplicates") unless order.uniq.length == order.length
+fail_check("dependency order does not cover every change") unless order.to_set == change_names
+
+changes.each do |name, config|
+  fail_check("registry references missing change #{name}") unless change_names.include?(name)
+  fail_check("#{name} has no owner") if config["owner"].to_s.empty?
+  fail_check("#{name} owner is not the change itself") unless config["owner"] == name
+
+  metadata_path = File.join(CHANGES_ROOT, name, ".openspec.yaml")
+  metadata = load_yaml(metadata_path)
+  expected = Array(config["dependsOn"])
+  actual = Array(metadata["dependsOn"])
+  fail_check("#{name} metadata dependencies differ from registry") unless actual == expected
+
+  expected.each do |dependency|
+    fail_check("#{name} depends on unknown change #{dependency}") unless changes.key?(dependency)
+    fail_check("#{name} is ordered before dependency #{dependency}") if order.index(name) <= order.index(dependency)
+  end
+end
+
+graph = changes.transform_values { |config| Array(config["dependsOn"]) }
+visiting = Set.new
+visited = Set.new
+walk = lambda do |node, path|
+  fail_check("dependency cycle: #{(path + [node]).join(' -> ')}") if visiting.include?(node)
+  return if visited.include?(node)
+
+  visiting.add(node)
+  graph.fetch(node).each { |dependency| walk.call(dependency, path + [node]) }
+  visiting.delete(node)
+  visited.add(node)
+end
+graph.keys.each { |name| walk.call(name, []) }
+
+owners = {}
+changes.each do |change_name, config|
+  Array(config["authoritativeCapabilities"]).each do |capability|
+    fail_check("capability #{capability} has owners #{owners[capability]} and #{change_name}") if owners.key?(capability)
+
+    owners[capability] = change_name
+  end
+end
+
+roadmap_specs = Dir.glob(File.join(CHANGES_ROOT, "fpl-analysis-workbench", "specs", "**", "*.md"))
+allowed_roadmap_spec = File.join(CHANGES_ROOT, "fpl-analysis-workbench", "specs", "analysis-workbench-roadmap", "spec.md")
+unexpected_parent_specs = roadmap_specs.reject { |path| path == allowed_roadmap_spec }
+fail_check("roadmap contains child-owned specs: #{unexpected_parent_specs.join(', ')}") unless unexpected_parent_specs.empty?
+
+formulas = load_yaml(formulas_path)
+fail_check("formula registry owner is not fpl-analysis-workbench") unless formulas["owner"] == "fpl-analysis-workbench"
+formula_consumers = formulas.fetch("formulas").values.flat_map { |formula| Array(formula["consumers"]) }
+formula_consumers.each do |consumer|
+  fail_check("formula registry references unknown consumer #{consumer}") unless changes.key?(consumer)
+end
+
+rules = load_yaml(rules_path)
+fail_check("rules registry owner is not fpl-optimal-team-learning") unless rules["owner"] == "fpl-optimal-team-learning"
+fail_check("rules registry has no rulesetId") if rules["rulesetId"].to_s.empty?
+
+warehouse = changes.fetch("fpl-public-data-warehouse").fetch("authoritativeCapabilities")
+fail_check("warehouse does not own its source contract") unless warehouse.include?("fpl-source-contract")
+fail_check("warehouse does not own the common response contract") unless warehouse.include?("common-response-contract")
+repository_path = File.join(ROOT, "backend", "internal", "app", "repository.go")
+repository_text = File.read(repository_path)
+fail_check("application repository embeds schema DDL; migrations must remain the warehouse schema authority") if repository_text.match?(/CREATE\s+(TABLE|INDEX)|schemaStatements/i)
+auth = changes.fetch("local-user-authentication").fetch("authoritativeCapabilities")
+fail_check("authentication ownership is missing workspace ownership") unless auth.include?("user-workspace-ownership")
+fail_check("technical debt claims account/session ownership") if changes.fetch("technical-debt-foundation").fetch("authoritativeCapabilities").any? { |capability| capability.match?(/auth|session|ownership/i) }
+
+stdout, stderr, status = Open3.capture3("openspec", "validate", "--changes", "--strict", "--no-interactive", chdir: ROOT)
+unless status.success?
+  warn stdout
+  warn stderr
+  fail_check("openspec strict validation failed")
+end
+
+puts "OpenSpec portfolio validation passed (#{changes.length} changes, #{owners.length} capabilities, #{formulas.fetch('formulas').length} formulas)."

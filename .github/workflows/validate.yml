@@ -12,6 +12,15 @@ on:
       - 'release/**'
 
 jobs:
+  openspec:
+    name: openspec
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Validate OpenSpec portfolio
+        run: ruby scripts/validate-openspec-portfolio
+
   build:
     name: build
     runs-on: ubuntu-latest
