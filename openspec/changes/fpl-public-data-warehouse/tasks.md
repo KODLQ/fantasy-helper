@@ -54,5 +54,5 @@
 - [x] 5.4 Update README/configuration documentation for PostgreSQL-backed sync, retention, scheduling, and troubleshooting.
 - [ ] 5.5 Run unit, integration, frontend, and browser smoke tests against the database-backed stack.
 - [x] 5.6 Add tests proving historical/current snapshot isolation and actual/partial/stale/unavailable state labels.
-- [ ] 5.7 Add retention cleanup tests that preserve canonical facts and active reproducibility references.
+- [x] 5.7 Add retention cleanup tests that preserve canonical facts and active reproducibility references.
 - [ ] 5.8 Add Playwright coverage for manual sync, progress, partial/failure states, stale/unavailable freshness, retry controls, and response errors.

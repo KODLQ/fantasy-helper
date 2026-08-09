@@ -21,11 +21,15 @@ func TestLoadConfigSourceTransportPolicy(t *testing.T) {
 	t.Setenv("SYNC_LIVE_CADENCE", "5m")
 	t.Setenv("SYNC_FINALIZATION_CADENCE", "10m")
 	t.Setenv("SYNC_RECONCILE_CADENCE", "12h")
+	t.Setenv("RETENTION_CLEANUP_ENABLED", "true")
+	t.Setenv("RETENTION_CLEANUP_CADENCE", "6h")
+	t.Setenv("RAW_PAYLOAD_RETENTION", "2160h")
+	t.Setenv("LIVE_PAYLOAD_RETENTION", "720h")
 	cfg, err := LoadConfig()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.SourceRetries != 4 || cfg.SourceRetryJitter != 275*time.Millisecond || cfg.SourceMaxConcurrent != 3 || cfg.SyncWorkers != 5 || !cfg.SchedulerEnabled || cfg.SchedulerTick != 30*time.Second || cfg.FixtureCadence != 45*time.Minute || cfg.ReconcileCadence != 12*time.Hour {
+	if cfg.SourceRetries != 4 || cfg.SourceRetryJitter != 275*time.Millisecond || cfg.SourceMaxConcurrent != 3 || cfg.SyncWorkers != 5 || !cfg.SchedulerEnabled || cfg.SchedulerTick != 30*time.Second || cfg.FixtureCadence != 45*time.Minute || cfg.ReconcileCadence != 12*time.Hour || !cfg.RetentionEnabled || cfg.RetentionCadence != 6*time.Hour || cfg.LivePayloadRetention != 720*time.Hour {
 		t.Fatalf("unexpected source transport configuration: %#v", cfg)
 	}
 	t.Setenv("FPL_SOURCE_MAX_CONCURRENT", "0")

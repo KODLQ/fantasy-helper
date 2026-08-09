@@ -61,6 +61,9 @@ func main() {
 		go scheduler.Run(schedulerCtx)
 		logger.Info("sync scheduler enabled", "catalogCadence", cfg.CatalogCadence, "fixtureCadence", cfg.FixtureCadence, "liveCadence", cfg.LiveCadence, "finalizationCadence", cfg.FinalizationCadence, "reconcileCadence", cfg.ReconcileCadence)
 	}
+	if cfg.RetentionEnabled {
+		go app.RunRetentionCleanup(schedulerCtx, repository, cfg.RetentionCadence, cfg.RawPayloadRetention, cfg.LivePayloadRetention, logger)
+	}
 	server := &http.Server{Addr: ":" + cfg.Port, Handler: api.Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)

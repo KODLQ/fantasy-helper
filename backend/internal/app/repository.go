@@ -97,6 +97,10 @@ type SourcePayloadRepository interface {
 	RecordSourceObservation(context.Context, SourceObservation) error
 }
 
+type RetentionRepository interface {
+	CleanupSourcePayloads(context.Context, time.Time, time.Time) (int64, error)
+}
+
 type SyncWorkRepository interface {
 	StartSyncRun(context.Context, Scope, string) (int64, error)
 	FinishSyncRun(context.Context, int64, SyncStatus) error
@@ -122,6 +126,21 @@ func (r *PostgresRepository) RecordSourceObservation(ctx context.Context, observ
 	}
 	_, err := r.db.ExecContext(ctx, `INSERT INTO source_payloads (endpoint, fetched_at, http_status, checksum, validation_state, schema_version, payload, diagnostic) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, observation.Endpoint, observation.FetchedAt, observation.HTTPStatus, observation.Checksum, observation.ValidationState, observation.SchemaVersion, payload, nullableString(observation.Diagnostic))
 	return err
+}
+
+func (r *PostgresRepository) CleanupSourcePayloads(ctx context.Context, successfulBefore, finalizedLiveBefore time.Time) (int64, error) {
+	if successfulBefore.IsZero() || finalizedLiveBefore.IsZero() {
+		return 0, fmt.Errorf("source payload cleanup requires baseline and live retention cutoffs")
+	}
+	result, err := r.db.ExecContext(ctx, `UPDATE source_payloads sp SET payload=NULL WHERE sp.payload IS NOT NULL AND sp.snapshot_id IS NULL AND sp.validation_state='valid' AND ((sp.endpoint NOT LIKE '/event/%/live/' AND sp.fetched_at<$1) OR (sp.endpoint LIKE '/event/%/live/' AND sp.fetched_at<$2 AND EXISTS (SELECT 1 FROM player_gameweek_facts f JOIN gameweeks g ON g.id=f.gameweek_id WHERE f.finalized AND g.source_id=substring(sp.endpoint FROM '/event/([0-9]+)/live/')::INTEGER)))`, successfulBefore, finalizedLiveBefore)
+	if err != nil {
+		return 0, fmt.Errorf("cleanup retained source payload bodies: %w", err)
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
 }
 
 func (r *PostgresRepository) StartSyncRun(ctx context.Context, scope Scope, correlationID string) (int64, error) {

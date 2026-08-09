@@ -31,6 +31,8 @@ The application starts with a small deterministic demo snapshot so the workspace
 
 Scheduled synchronization is disabled by default until an initial manual sync has been verified. Enable it with `SYNC_SCHEDULER_ENABLED=true`. Catalog and fixtures default to hourly refreshes, live gameweeks to five-minute refreshes, post-match finalization to fifteen-minute confirmation refreshes, and historical reconciliation to daily runs. Configure these with `SYNC_CATALOG_CADENCE`, `SYNC_FIXTURE_CADENCE`, `SYNC_LIVE_CADENCE`, `SYNC_FINALIZATION_CADENCE`, and `SYNC_RECONCILE_CADENCE`; `SYNC_SCHEDULER_TICK` controls how often due policies are evaluated. Scope locking prevents the scheduler from overlapping an active manual or scheduled run.
 
+Raw-body retention is also opt-in with `RETENTION_CLEANUP_ENABLED=true`. Baseline bodies default to 90 days (`RAW_PAYLOAD_RETENTION=2160h`) and finalized live bodies to 30 days (`LIVE_PAYLOAD_RETENTION=720h`). Cleanup nulls eligible raw bodies but preserves source metadata and checksums, invalid diagnostics, snapshot-linked reproducibility inputs, and every canonical fact.
+
 ## API surface
 
 - `GET /healthz` — service, database-network, and data status.

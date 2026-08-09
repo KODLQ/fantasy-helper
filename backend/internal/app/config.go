@@ -13,29 +13,33 @@ import (
 )
 
 type Config struct {
-	Port                string
-	DatabaseURL         string
-	FPLBaseURL          string
-	SourceSeasonID      int
-	SourceSeasonName    string
-	SourceDiscovery     bool
-	SourceTimeout       time.Duration
-	SourceRetries       int
-	SourceRetryJitter   time.Duration
-	SourceMaxConcurrent int
-	SyncWorkers         int
-	SchedulerEnabled    bool
-	SchedulerTick       time.Duration
-	CatalogCadence      time.Duration
-	FixtureCadence      time.Duration
-	LiveCadence         time.Duration
-	FinalizationCadence time.Duration
-	ReconcileCadence    time.Duration
-	Environment         string
-	DatabaseMaxConns    int
-	DatabaseMaxIdle     int
-	DatabasePing        time.Duration
-	ShutdownTimeout     time.Duration
+	Port                 string
+	DatabaseURL          string
+	FPLBaseURL           string
+	SourceSeasonID       int
+	SourceSeasonName     string
+	SourceDiscovery      bool
+	SourceTimeout        time.Duration
+	SourceRetries        int
+	SourceRetryJitter    time.Duration
+	SourceMaxConcurrent  int
+	SyncWorkers          int
+	SchedulerEnabled     bool
+	SchedulerTick        time.Duration
+	CatalogCadence       time.Duration
+	FixtureCadence       time.Duration
+	LiveCadence          time.Duration
+	FinalizationCadence  time.Duration
+	ReconcileCadence     time.Duration
+	RetentionEnabled     bool
+	RetentionCadence     time.Duration
+	RawPayloadRetention  time.Duration
+	LivePayloadRetention time.Duration
+	Environment          string
+	DatabaseMaxConns     int
+	DatabaseMaxIdle      int
+	DatabasePing         time.Duration
+	ShutdownTimeout      time.Duration
 }
 
 func LoadConfig() (Config, error) {
@@ -86,33 +90,40 @@ func LoadConfig() (Config, error) {
 	liveCadence := envDuration("SYNC_LIVE_CADENCE", 5*time.Minute)
 	finalizationCadence := envDuration("SYNC_FINALIZATION_CADENCE", 15*time.Minute)
 	reconcileCadence := envDuration("SYNC_RECONCILE_CADENCE", 24*time.Hour)
-	if schedulerTick <= 0 || catalogCadence <= 0 || fixtureCadence <= 0 || liveCadence <= 0 || finalizationCadence <= 0 || reconcileCadence <= 0 {
+	retentionCadence := envDuration("RETENTION_CLEANUP_CADENCE", 24*time.Hour)
+	rawPayloadRetention := envDuration("RAW_PAYLOAD_RETENTION", 90*24*time.Hour)
+	livePayloadRetention := envDuration("LIVE_PAYLOAD_RETENTION", 30*24*time.Hour)
+	if schedulerTick <= 0 || catalogCadence <= 0 || fixtureCadence <= 0 || liveCadence <= 0 || finalizationCadence <= 0 || reconcileCadence <= 0 || retentionCadence <= 0 || rawPayloadRetention <= 0 || livePayloadRetention <= 0 {
 		return Config{}, fmt.Errorf("sync scheduler tick and cadence durations must be positive")
 	}
 	return Config{
-		Port:                configEnv("BACKEND_PORT", "8080"),
-		DatabaseURL:         os.Getenv("DATABASE_URL"),
-		FPLBaseURL:          configEnv("FPL_BASE_URL", "https://fantasy.premierleague.com/api"),
-		SourceSeasonID:      seasonID,
-		SourceSeasonName:    seasonName,
-		SourceDiscovery:     discovery,
-		SourceTimeout:       envDuration("FPL_SOURCE_TIMEOUT", 20*time.Second),
-		SourceRetries:       retries,
-		SourceRetryJitter:   envDuration("FPL_SOURCE_RETRY_JITTER", 100*time.Millisecond),
-		SourceMaxConcurrent: maxConcurrent,
-		SyncWorkers:         workers,
-		SchedulerEnabled:    envBool("SYNC_SCHEDULER_ENABLED", false),
-		SchedulerTick:       schedulerTick,
-		CatalogCadence:      catalogCadence,
-		FixtureCadence:      fixtureCadence,
-		LiveCadence:         liveCadence,
-		FinalizationCadence: finalizationCadence,
-		ReconcileCadence:    reconcileCadence,
-		Environment:         configEnv("APP_ENV", "local"),
-		DatabaseMaxConns:    maxConns,
-		DatabaseMaxIdle:     maxIdle,
-		DatabasePing:        envDuration("DB_PING_TIMEOUT", 3*time.Second),
-		ShutdownTimeout:     envDuration("SHUTDOWN_TIMEOUT", 10*time.Second),
+		Port:                 configEnv("BACKEND_PORT", "8080"),
+		DatabaseURL:          os.Getenv("DATABASE_URL"),
+		FPLBaseURL:           configEnv("FPL_BASE_URL", "https://fantasy.premierleague.com/api"),
+		SourceSeasonID:       seasonID,
+		SourceSeasonName:     seasonName,
+		SourceDiscovery:      discovery,
+		SourceTimeout:        envDuration("FPL_SOURCE_TIMEOUT", 20*time.Second),
+		SourceRetries:        retries,
+		SourceRetryJitter:    envDuration("FPL_SOURCE_RETRY_JITTER", 100*time.Millisecond),
+		SourceMaxConcurrent:  maxConcurrent,
+		SyncWorkers:          workers,
+		SchedulerEnabled:     envBool("SYNC_SCHEDULER_ENABLED", false),
+		SchedulerTick:        schedulerTick,
+		CatalogCadence:       catalogCadence,
+		FixtureCadence:       fixtureCadence,
+		LiveCadence:          liveCadence,
+		FinalizationCadence:  finalizationCadence,
+		ReconcileCadence:     reconcileCadence,
+		RetentionEnabled:     envBool("RETENTION_CLEANUP_ENABLED", false),
+		RetentionCadence:     retentionCadence,
+		RawPayloadRetention:  rawPayloadRetention,
+		LivePayloadRetention: livePayloadRetention,
+		Environment:          configEnv("APP_ENV", "local"),
+		DatabaseMaxConns:     maxConns,
+		DatabaseMaxIdle:      maxIdle,
+		DatabasePing:         envDuration("DB_PING_TIMEOUT", 3*time.Second),
+		ShutdownTimeout:      envDuration("SHUTDOWN_TIMEOUT", 10*time.Second),
 	}, nil
 }
 

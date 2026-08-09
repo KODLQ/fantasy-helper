@@ -192,6 +192,41 @@ func TestPostgresRepositoryPersistence(t *testing.T) {
 	if payloadCount != 1 {
 		t.Fatalf("source observation not persisted: %d", payloadCount)
 	}
+	retentionNow := time.Now().UTC()
+	for _, observation := range []SourceObservation{
+		{Endpoint: "/bootstrap-static/", FetchedAt: retentionNow.Add(-100 * 24 * time.Hour), HTTPStatus: 200, Checksum: "old-baseline", ValidationState: "valid", SchemaVersion: "fpl-public-v1", Payload: []byte(`{"old":true}`)},
+		{Endpoint: "/fixtures/", FetchedAt: retentionNow.Add(-100 * 24 * time.Hour), HTTPStatus: 200, Checksum: "linked-baseline", ValidationState: "valid", SchemaVersion: "fpl-public-v1", Payload: []byte(`{"linked":true}`)},
+		{Endpoint: "/event/1/live/", FetchedAt: retentionNow.Add(-40 * 24 * time.Hour), HTTPStatus: 200, Checksum: "old-finalized-live", ValidationState: "valid", SchemaVersion: "fpl-public-v1", Payload: []byte(`{"live":true}`)},
+		{Endpoint: "/bootstrap-static/", FetchedAt: retentionNow.Add(-100 * 24 * time.Hour), HTTPStatus: 200, Checksum: "old-invalid", ValidationState: "invalid", SchemaVersion: "fpl-public-v1", Payload: []byte(`{"invalid":true}`)},
+	} {
+		if err := repository.RecordSourceObservation(ctx, observation); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := database.ExecContext(ctx, `UPDATE source_payloads SET snapshot_id=$1 WHERE checksum='linked-baseline'`, datasetSnapshotID); err != nil {
+		t.Fatal(err)
+	}
+	var canonicalBefore int
+	if err := database.QueryRowContext(ctx, `SELECT COUNT(*) FROM player_gameweek_facts`).Scan(&canonicalBefore); err != nil {
+		t.Fatal(err)
+	}
+	purged, err := repository.CleanupSourcePayloads(ctx, retentionNow.Add(-90*24*time.Hour), retentionNow.Add(-30*24*time.Hour))
+	if err != nil || purged != 2 {
+		t.Fatalf("unexpected retention cleanup: purged=%d err=%v", purged, err)
+	}
+	var purgedBodies, preservedBodies, canonicalAfter int
+	if err := database.QueryRowContext(ctx, `SELECT COUNT(*) FROM source_payloads WHERE checksum IN ('old-baseline','old-finalized-live') AND payload IS NULL`).Scan(&purgedBodies); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRowContext(ctx, `SELECT COUNT(*) FROM source_payloads WHERE checksum IN ('linked-baseline','old-invalid') AND payload IS NOT NULL`).Scan(&preservedBodies); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRowContext(ctx, `SELECT COUNT(*) FROM player_gameweek_facts`).Scan(&canonicalAfter); err != nil {
+		t.Fatal(err)
+	}
+	if purgedBodies != 2 || preservedBodies != 2 || canonicalAfter != canonicalBefore {
+		t.Fatalf("retention crossed safety boundary: purged=%d preserved=%d canonical=%d/%d", purgedBodies, preservedBodies, canonicalBefore, canonicalAfter)
+	}
 
 	transactional := interface{}(repository).(TransactionalRepository)
 	if err := transactional.WithTransaction(ctx, func(tx *sql.Tx) error {
