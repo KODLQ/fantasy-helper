@@ -49,8 +49,8 @@
 ## 5. Verification and rollout
 
 - [x] 5.1 Add migration verification, repository idempotency, transaction rollback, and restart-resume tests.
-- [ ] 5.2 Add full-sync integration tests using sanitized source fixtures and a fake source server.
-- [ ] 5.3 Compare player counts, fixture counts, gameweek facts, and selected metrics before/after the new pipeline.
+- [x] 5.2 Add full-sync integration tests using sanitized source fixtures and a fake source server.
+- [x] 5.3 Compare player counts, fixture counts, gameweek facts, and selected metrics before/after the new pipeline.
 - [x] 5.4 Update README/configuration documentation for PostgreSQL-backed sync, retention, scheduling, and troubleshooting.
 - [ ] 5.5 Run unit, integration, frontend, and browser smoke tests against the database-backed stack.
 - [ ] 5.6 Add tests proving historical/current snapshot isolation and actual/partial/stale/unavailable state labels.
