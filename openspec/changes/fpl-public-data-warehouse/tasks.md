@@ -25,7 +25,7 @@
 ## 3. Sync orchestration and recovery
 
 - [ ] 3.1 Implement dependency-ordered initial catalog, fixture, live-data, and player-history stages.
-- [ ] 3.2 Implement durable work-item claiming, retry counts, backoff, `Retry-After`, and restart recovery.
+- [x] 3.2 Implement durable work-item claiming, retry counts, backoff, `Retry-After`, and restart recovery.
 - [x] 3.3 Add bounded concurrency and configurable request timeouts without blocking unrelated stages.
 - [x] 3.4 Implement idempotent canonical upserts and last-known-good retention for failed work.
 - [ ] 3.5 Add current-gameweek incremental refresh and completed-gameweek finalization.
@@ -48,7 +48,7 @@
 
 ## 5. Verification and rollout
 
-- [ ] 5.1 Add migration verification, repository idempotency, transaction rollback, and restart-resume tests.
+- [x] 5.1 Add migration verification, repository idempotency, transaction rollback, and restart-resume tests.
 - [ ] 5.2 Add full-sync integration tests using sanitized source fixtures and a fake source server.
 - [ ] 5.3 Compare player counts, fixture counts, gameweek facts, and selected metrics before/after the new pipeline.
 - [x] 5.4 Update README/configuration documentation for PostgreSQL-backed sync, retention, scheduling, and troubleshooting.

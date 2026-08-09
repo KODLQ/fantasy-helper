@@ -81,7 +81,24 @@ func (r *PostgresRepository) RecordSourceObservation(ctx context.Context, observ
 
 func (r *PostgresRepository) StartSyncRun(ctx context.Context, scope Scope, correlationID string) (int64, error) {
 	var id int64
-	err := r.db.QueryRowContext(ctx, `INSERT INTO sync_runs (status, scope, season_source_id, gameweek_source_id, correlation_id) VALUES ('running',$1,$2,$3,$4) RETURNING id`, scope.Dataset, nullableInt(scope.SeasonID), nullableInt(scope.Gameweek), nullableString(correlationID)).Scan(&id)
+	err := r.WithTransaction(ctx, func(tx *sql.Tx) error {
+		// A process restart can leave a run and its claimed work marked running.
+		// Requeue only claims that have exceeded the lease window, then close the
+		// abandoned run so the scope lock cannot prevent recovery forever.
+		if _, err := tx.ExecContext(ctx, `UPDATE sync_work_items SET status='pending', available_at=NOW(), claimed_at=NULL WHERE status='running' AND claimed_at < NOW() - INTERVAL '10 minutes' AND sync_run_id IN (SELECT id FROM sync_runs WHERE status='running' AND started_at < NOW() - INTERVAL '10 minutes')`); err != nil {
+			return fmt.Errorf("recover abandoned sync work: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE sync_runs SET status='partial', finished_at=NOW(), warning=COALESCE(warning, 'Sync run was recovered after its worker lease expired.') WHERE status='running' AND started_at < NOW() - INTERVAL '10 minutes'`); err != nil {
+			return fmt.Errorf("recover abandoned sync runs: %w", err)
+		}
+		if err := tx.QueryRowContext(ctx, `INSERT INTO sync_runs (status, scope, season_source_id, gameweek_source_id, correlation_id) VALUES ('running',$1,$2,$3,$4) RETURNING id`, scope.Dataset, nullableInt(scope.SeasonID), nullableInt(scope.Gameweek), nullableString(correlationID)).Scan(&id); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE sync_work_items SET sync_run_id=$1 WHERE sync_run_id=(SELECT id FROM sync_runs WHERE status='partial' AND scope=$2 AND COALESCE(season_source_id,0)=COALESCE($3,0) AND COALESCE(gameweek_source_id,0)=COALESCE($4,0) ORDER BY started_at DESC, id DESC LIMIT 1) AND status='pending'`, id, scope.Dataset, nullableInt(scope.SeasonID), nullableInt(scope.Gameweek)); err != nil {
+			return fmt.Errorf("resume pending sync work: %w", err)
+		}
+		return nil
+	})
 	if err != nil {
 		return 0, fmt.Errorf("start sync run: %w", err)
 	}

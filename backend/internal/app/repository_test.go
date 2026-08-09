@@ -225,7 +225,51 @@ func TestPostgresSyncWorkQueueClaimsIdempotently(t *testing.T) {
 	if loaded.RunID != runID || loaded.Status != "success" || loaded.TotalWork != 1 || loaded.CompletedWork != 1 || loaded.FailedWork != 0 || loaded.RetryableWork != 0 {
 		t.Fatalf("unexpected persisted sync status: %#v", loaded)
 	}
-	if _, err := repository.StartSyncRun(ctx, scope, "after-completion"); err != nil {
+	afterCompletionRun, err := repository.StartSyncRun(ctx, scope, "after-completion")
+	if err != nil {
 		t.Fatalf("completed scope remained locked: %v", err)
+	}
+	if err := repository.FinishSyncRun(ctx, afterCompletionRun, SyncStatus{Status: "success", FinishedAt: time.Now().UTC(), Scope: scope}); err != nil {
+		t.Fatal(err)
+	}
+
+	recoveryScope := Scope{Dataset: fmt.Sprintf("test-recovery-%d", time.Now().UnixNano())}
+	abandonedRun, err := repository.StartSyncRun(ctx, recoveryScope, "crashed-worker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.EnqueueSyncWork(ctx, abandonedRun, []SyncWorkItem{{Scope: "player-history", NaturalKey: "recovery:1", Endpoint: "/element-summary/1/", EntitySourceID: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	abandonedItem, ok, err := repository.ClaimSyncWork(ctx, abandonedRun)
+	if err != nil || !ok {
+		t.Fatalf("expected work to be claimed before simulated restart: %#v ok=%v err=%v", abandonedItem, ok, err)
+	}
+	if _, err := database.ExecContext(ctx, `UPDATE sync_runs SET started_at=NOW() - INTERVAL '20 minutes' WHERE id=$1`, abandonedRun); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(ctx, `UPDATE sync_work_items SET claimed_at=NOW() - INTERVAL '20 minutes' WHERE id=$1`, abandonedItem.ID); err != nil {
+		t.Fatal(err)
+	}
+	recoveredRun, err := repository.StartSyncRun(ctx, recoveryScope, "after-restart")
+	if err != nil {
+		t.Fatalf("restart did not recover the abandoned scope: %v", err)
+	}
+	var abandonedStatus string
+	if err := database.QueryRowContext(ctx, `SELECT status FROM sync_runs WHERE id=$1`, abandonedRun).Scan(&abandonedStatus); err != nil {
+		t.Fatal(err)
+	}
+	if abandonedStatus != "partial" {
+		t.Fatalf("abandoned run status = %q, want partial", abandonedStatus)
+	}
+	recoveredItem, ok, err := repository.ClaimSyncWork(ctx, recoveredRun)
+	if err != nil || !ok || recoveredItem.Attempts != 2 {
+		t.Fatalf("restart did not make abandoned work claimable: %#v ok=%v err=%v", recoveredItem, ok, err)
+	}
+	if err := repository.CompleteSyncWork(ctx, recoveredItem.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.FinishSyncRun(ctx, recoveredRun, SyncStatus{Status: "success", FinishedAt: time.Now().UTC(), Scope: recoveryScope}); err != nil {
+		t.Fatal(err)
 	}
 }
