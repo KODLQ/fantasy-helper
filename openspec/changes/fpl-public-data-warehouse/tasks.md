@@ -24,7 +24,7 @@
 
 ## 3. Sync orchestration and recovery
 
-- [ ] 3.1 Implement dependency-ordered initial catalog, fixture, live-data, and player-history stages.
+- [x] 3.1 Implement dependency-ordered initial catalog, fixture, live-data, and player-history stages.
 - [x] 3.2 Implement durable work-item claiming, retry counts, backoff, `Retry-After`, and restart recovery.
 - [x] 3.3 Add bounded concurrency and configurable request timeouts without blocking unrelated stages.
 - [x] 3.4 Implement idempotent canonical upserts and last-known-good retention for failed work.

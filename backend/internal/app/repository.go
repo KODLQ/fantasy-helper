@@ -48,6 +48,15 @@ type SyncStatusRepository interface {
 	RetrySyncRun(context.Context, int64) (SyncStatus, error)
 }
 
+type SyncStageRepository interface {
+	RecordSyncStage(context.Context, SyncStage) error
+}
+
+type WarehouseFactRepository interface {
+	UpsertFixtureStats(context.Context, int, time.Time, []SourceFixture) error
+	UpsertLiveGameweek(context.Context, string, int, int, bool, time.Time, []LivePlayerStats) error
+}
+
 type SourcePayloadRepository interface {
 	RecordSourceObservation(context.Context, SourceObservation) error
 }
@@ -114,6 +123,87 @@ func (r *PostgresRepository) FinishSyncRun(ctx context.Context, runID int64, sta
 	return nil
 }
 
+func (r *PostgresRepository) RecordSyncStage(ctx context.Context, stage SyncStage) error {
+	if stage.RunID <= 0 || stage.Name == "" || stage.Status == "" {
+		return fmt.Errorf("sync stage requires run ID, name, and status")
+	}
+	if stage.StartedAt.IsZero() {
+		stage.StartedAt = time.Now().UTC()
+	}
+	result, err := r.db.ExecContext(ctx, `UPDATE sync_stages SET status=$1, processed_count=$2, failed_count=$3, error=$4, finished_at=$5 WHERE sync_run_id=$6 AND stage=$7`, stage.Status, stage.ProcessedCount, stage.FailedCount, nullableString(stage.Error), nullableTime(stage.FinishedAt), stage.RunID, stage.Name)
+	if err != nil {
+		return fmt.Errorf("update sync stage %s: %w", stage.Name, err)
+	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if updated > 0 {
+		return nil
+	}
+	_, err = r.db.ExecContext(ctx, `INSERT INTO sync_stages (sync_run_id, stage, status, processed_count, failed_count, error, started_at, finished_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, stage.RunID, stage.Name, stage.Status, stage.ProcessedCount, stage.FailedCount, nullableString(stage.Error), stage.StartedAt, nullableTime(stage.FinishedAt))
+	if err != nil {
+		return fmt.Errorf("insert sync stage %s: %w", stage.Name, err)
+	}
+	return nil
+}
+
+func (r *PostgresRepository) UpsertFixtureStats(ctx context.Context, seasonSourceID int, observedAt time.Time, fixtures []SourceFixture) error {
+	if seasonSourceID <= 0 || observedAt.IsZero() {
+		return fmt.Errorf("fixture statistics require season identity and observation time")
+	}
+	return r.WithTransaction(ctx, func(tx *sql.Tx) error {
+		for _, fixture := range fixtures {
+			for _, statistic := range fixture.Stats {
+				values := append([]SourceStatValue{}, statistic.Home...)
+				values = append(values, statistic.Away...)
+				for _, value := range values {
+					raw, err := json.Marshal(value)
+					if err != nil {
+						return fmt.Errorf("encode fixture %d statistic %s: %w", fixture.ID, statistic.Identifier, err)
+					}
+					result, err := tx.ExecContext(ctx, `INSERT INTO fixture_stats (fixture_id, player_id, stat_type, stat_value, source_observed_at, raw) SELECT f.id, p.id, $3, $4, $5, $6 FROM fixtures f JOIN seasons s ON s.id=f.season_id JOIN players p ON p.season_id=s.id AND p.source_id=$7 WHERE s.source_id=$1 AND f.source_id=$2 ON CONFLICT (fixture_id, player_id, stat_type, source_observed_at) DO UPDATE SET stat_value=EXCLUDED.stat_value, raw=EXCLUDED.raw`, seasonSourceID, fixture.ID, statistic.Identifier, value.Value, observedAt, raw, value.Element)
+					if err != nil {
+						return fmt.Errorf("upsert fixture %d statistic %s for player %d: %w", fixture.ID, statistic.Identifier, value.Element, err)
+					}
+					if affected, err := result.RowsAffected(); err != nil || affected != 1 {
+						if err != nil {
+							return err
+						}
+						return fmt.Errorf("fixture %d statistic %s references unknown player %d", fixture.ID, statistic.Identifier, value.Element)
+					}
+				}
+			}
+		}
+		return nil
+	})
+}
+
+func (r *PostgresRepository) UpsertLiveGameweek(ctx context.Context, snapshotID string, seasonSourceID, gameweekSourceID int, finalized bool, observedAt time.Time, players []LivePlayerStats) error {
+	if snapshotID == "" || seasonSourceID <= 0 || gameweekSourceID <= 0 || observedAt.IsZero() {
+		return fmt.Errorf("live gameweek facts require snapshot, season, gameweek, and observation time")
+	}
+	return r.WithTransaction(ctx, func(tx *sql.Tx) error {
+		for _, player := range players {
+			raw, err := json.Marshal(player)
+			if err != nil {
+				return fmt.Errorf("encode live facts for player %d: %w", player.PlayerID, err)
+			}
+			result, err := tx.ExecContext(ctx, `INSERT INTO player_gameweek_facts (snapshot_id, player_id, gameweek_id, source_observed_at, finalized, minutes, total_points, goals_scored, assists, clean_sheets, bonus, bps, saves, yellow_cards, red_cards, own_goals, penalties_saved, penalties_missed, expected_goals, expected_assists, raw) SELECT $1, p.id, g.id, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22 FROM seasons s JOIN players p ON p.season_id=s.id AND p.source_id=$4 JOIN gameweeks g ON g.season_id=s.id AND g.source_id=$3 WHERE s.source_id=$2 ON CONFLICT (snapshot_id, player_id, gameweek_id) DO UPDATE SET source_observed_at=EXCLUDED.source_observed_at, finalized=EXCLUDED.finalized, minutes=EXCLUDED.minutes, total_points=EXCLUDED.total_points, goals_scored=EXCLUDED.goals_scored, assists=EXCLUDED.assists, clean_sheets=EXCLUDED.clean_sheets, bonus=EXCLUDED.bonus, bps=EXCLUDED.bps, saves=EXCLUDED.saves, yellow_cards=EXCLUDED.yellow_cards, red_cards=EXCLUDED.red_cards, own_goals=EXCLUDED.own_goals, penalties_saved=EXCLUDED.penalties_saved, penalties_missed=EXCLUDED.penalties_missed, expected_goals=EXCLUDED.expected_goals, expected_assists=EXCLUDED.expected_assists, raw=EXCLUDED.raw`, snapshotID, seasonSourceID, gameweekSourceID, player.PlayerID, observedAt, finalized, player.Minutes, player.Points, player.Goals, player.Assists, player.CleanSheets, player.Bonus, player.BPS, player.Saves, player.YellowCards, player.RedCards, player.OwnGoals, player.PenaltiesSaved, player.PenaltiesMissed, parseFloat(player.ExpectedGoals), parseFloat(player.ExpectedAssists), raw)
+			if err != nil {
+				return fmt.Errorf("upsert live facts for player %d: %w", player.PlayerID, err)
+			}
+			if affected, err := result.RowsAffected(); err != nil || affected != 1 {
+				if err != nil {
+					return err
+				}
+				return fmt.Errorf("live facts reference unknown player %d or gameweek %d", player.PlayerID, gameweekSourceID)
+			}
+		}
+		return nil
+	})
+}
+
 func (r *PostgresRepository) LoadLatestSyncStatus(ctx context.Context) (SyncStatus, error) {
 	var status SyncStatus
 	var scope, warning, checksum, correlationID sql.NullString
@@ -157,6 +247,8 @@ func (r *PostgresRepository) LoadLatestSyncStatus(ctx context.Context) (SyncStat
 		}
 		if stageStatus == "success" {
 			status.CompletedStages = append(status.CompletedStages, stage)
+		} else if stageStatus == "running" {
+			status.CurrentStage = stage
 		} else {
 			status.FailedStages = append(status.FailedStages, stage)
 		}

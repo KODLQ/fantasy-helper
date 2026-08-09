@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -166,5 +168,58 @@ func TestAPISyncCoordinatorCancelsAndWaits(t *testing.T) {
 	metrics := api.Metrics()
 	if metrics.Started != 1 || metrics.Cancelled != 1 {
 		t.Fatalf("unexpected sync metrics: %#v", metrics)
+	}
+}
+
+func TestAPISyncRunsDependencyOrderedStages(t *testing.T) {
+	var mu sync.Mutex
+	requests := []string{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		requests = append(requests, r.URL.RequestURI())
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/bootstrap-static/":
+			_, _ = w.Write([]byte(`{"season_id":2026,"season_name":"2026/27","events":[{"id":1,"name":"Gameweek 1","is_current":true}],"phases":[],"game_settings":{},"element_types":[{"id":1,"singular_name":"Goalkeeper","plural_name":"Goalkeepers"}],"teams":[{"id":1,"name":"Home","short_name":"HOM"},{"id":2,"name":"Away","short_name":"AWY"}],"elements":[{"id":10,"first_name":"A","second_name":"Keeper","web_name":"Keeper","element_type":1,"team":1,"now_cost":50,"form":"1.0","value_form":"1.0","status":"a"}]}`))
+		case "/fixtures/":
+			_, _ = w.Write([]byte(`[{"id":99,"event":1,"team_h":1,"team_a":2,"team_h_difficulty":2,"team_a_difficulty":4,"stats":[]}]`))
+		case "/event/1/live/":
+			_, _ = w.Write([]byte(`{"finished":false,"elements":[{"id":10,"stats":{"minutes":90,"total_points":6}}]}`))
+		case "/element-summary/10/":
+			_, _ = w.Write([]byte(`{"history":[{"element":10,"round":1,"fixture":99,"opponent_team":2,"was_home":true,"minutes":90,"total_points":6}],"history_past":[],"fixtures":[]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	api := NewAPI(NewStore(), NewFPLSourceWithSeason(server.URL, 2026, "2026/27"), nil, nil)
+	api.runSync(context.Background(), Scope{Dataset: "full"}, 0)
+	status := api.Store.SyncStatus()
+	if status.Status != "success" || strings.Join(status.CompletedStages, ",") != "catalog,fixtures,live,player-history" {
+		t.Fatalf("unexpected stage result: %#v", status)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(requests) != 4 || requests[0] != "/bootstrap-static/" || requests[1] != "/fixtures/" || requests[2] != "/event/1/live/" || requests[3] != "/element-summary/10/" {
+		t.Fatalf("source requests were not dependency ordered: %#v", requests)
+	}
+}
+
+func TestMergeFixturesReplacesOnlyRequestedGameweek(t *testing.T) {
+	merged := mergeFixtures([]Fixture{{ID: 1, Gameweek: 1}, {ID: 2, Gameweek: 2}}, []Fixture{{ID: 3, Gameweek: 2}}, 2)
+	if len(merged) != 2 || merged[0].ID != 1 || merged[1].ID != 3 {
+		t.Fatalf("unexpected scoped fixture merge: %#v", merged)
+	}
+}
+
+func TestLiveFinalizedUsesExplicitSourceThenCheckedEvent(t *testing.T) {
+	value := false
+	if liveFinalized([]SourceEvent{{ID: 1, Finished: true, DataChecked: true}}, 1, &value) {
+		t.Fatal("explicit provisional source state must win")
+	}
+	if !liveFinalized([]SourceEvent{{ID: 1, Finished: true, DataChecked: true}}, 1, nil) {
+		t.Fatal("finished and checked event should be finalized")
 	}
 }

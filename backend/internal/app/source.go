@@ -627,14 +627,21 @@ func (f *FPLSource) Snapshot(ctx context.Context) (Season, []Gameweek, []Team, [
 	if err != nil {
 		return Season{}, nil, nil, nil, nil, checksum, err
 	}
-	fixtures := fixtureFeed.Fixtures
 	checksum = checksum + ":" + fixtureChecksum
+	season, weeks, teams, players, fixtures, err := f.NormalizeSnapshot(catalog, fixtureFeed)
+	if err != nil {
+		return Season{}, nil, nil, nil, nil, checksum, err
+	}
+	return season, weeks, teams, players, fixtures, checksum, nil
+}
+
+func (f *FPLSource) NormalizeSnapshot(catalog BootstrapCatalog, fixtureFeed FixtureFeed) (Season, []Gameweek, []Team, []Player, []Fixture, error) {
 	seasonID, seasonName := f.SeasonID, f.SeasonName
 	if f.AllowDiscovery && seasonID == 0 && seasonName == "" {
 		seasonID, seasonName = catalog.SeasonID, catalog.SeasonName
 	}
 	if seasonID <= 0 || strings.TrimSpace(seasonName) == "" {
-		return Season{}, nil, nil, nil, nil, checksum, fmt.Errorf("source season identity is required: configure FPL_SOURCE_SEASON_ID and FPL_SOURCE_SEASON_NAME or provide bootstrap discovery metadata")
+		return Season{}, nil, nil, nil, nil, fmt.Errorf("source season identity is required: configure FPL_SOURCE_SEASON_ID and FPL_SOURCE_SEASON_NAME or provide bootstrap discovery metadata")
 	}
 	season := Season{ID: seasonID, Name: seasonName, IsCurrent: true, UpdatedAt: time.Now().UTC()}
 	weeks := make([]Gameweek, 0, len(catalog.Events))
@@ -649,15 +656,15 @@ func (f *FPLSource) Snapshot(ctx context.Context) (Season, []Gameweek, []Team, [
 	for _, player := range catalog.Elements {
 		players = append(players, Player{ID: player.ID, FirstName: player.FirstName, SecondName: player.SecondName, WebName: player.WebName, Position: player.ElementType, TeamID: player.Team, Price: float64(player.NowCost) / 10, TotalPoints: player.TotalPoints, Form: parseFloat(player.Form), Minutes: player.Minutes, Value: parseFloat(player.ValueForm), Status: player.Status, News: player.News, ChanceOfPlaying: player.Chance, GoalsScored: player.Goals, Assists: player.Assists, CleanSheets: player.CleanSheets, Bonus: player.Bonus, Saves: player.Saves, SelectedByPercent: parseFloat(player.SelectedByPercent), YellowCards: player.YellowCards, RedCards: player.RedCards, OwnGoals: player.OwnGoals, PenaltiesSaved: player.PenaltiesSaved, PenaltiesMissed: player.PenaltiesMissed, ExpectedGoals: parseFloat(player.ExpectedGoals), ExpectedAssists: parseFloat(player.ExpectedAssists), ExpectedMinutes: minutesSignal(player.Minutes), RecentReturns: float64(player.Goals+player.Assists) / 10})
 	}
-	normalizedFixtures := make([]Fixture, 0, len(fixtures))
-	for _, fixture := range fixtures {
+	normalizedFixtures := make([]Fixture, 0, len(fixtureFeed.Fixtures))
+	for _, fixture := range fixtureFeed.Fixtures {
 		gameweek := 0
 		if fixture.Event != nil {
 			gameweek = *fixture.Event
 		}
 		normalizedFixtures = append(normalizedFixtures, Fixture{ID: fixture.ID, Gameweek: gameweek, KickoffTime: fixture.Kickoff, Finished: fixture.Finished, HomeTeam: fixture.TeamH, AwayTeam: fixture.TeamA, HomeDifficulty: fixture.HDiff, AwayDifficulty: fixture.ADiff, HomeScore: fixture.HScore, AwayScore: fixture.AScore})
 	}
-	return season, weeks, teams, players, normalizedFixtures, checksum, nil
+	return season, weeks, teams, players, normalizedFixtures, nil
 }
 func (f *FPLSource) PlayerHistory(ctx context.Context, playerID int) ([]PlayerHistory, string, error) {
 	var summary playerSummary

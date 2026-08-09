@@ -147,6 +147,17 @@ type SyncWorkItem struct {
 	LastError        string    `json:"lastError,omitempty"`
 }
 
+type SyncStage struct {
+	RunID          int64
+	Name           string
+	Status         string
+	ProcessedCount int
+	FailedCount    int
+	Error          string
+	StartedAt      time.Time
+	FinishedAt     time.Time
+}
+
 type ResponseMeta struct {
 	RequestID  string      `json:"requestId"`
 	Scope      Scope       `json:"scope,omitempty"`

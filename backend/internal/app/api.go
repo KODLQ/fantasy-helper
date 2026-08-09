@@ -292,7 +292,7 @@ func (a *API) sync(w http.ResponseWriter, r *http.Request) {
 	}
 	started := time.Now().UTC()
 	scope := Scope{SeasonID: request.SeasonID, Gameweek: request.Gameweek, Dataset: request.Scope}
-	running := SyncStatus{Status: "running", Scope: scope, CurrentStage: "snapshot", StartedAt: started, CompletedStages: []string{}, FailedStages: []string{}, Freshness: a.Store.Freshness()}
+	running := SyncStatus{Status: "running", Scope: scope, CurrentStage: "catalog", CorrelationID: w.Header().Get("X-Request-ID"), StartedAt: started, CompletedStages: []string{}, FailedStages: []string{}, Freshness: a.Store.Freshness()}
 	if syncRepository, ok := a.Repository.(SyncWorkRepository); ok {
 		runID, err := syncRepository.StartSyncRun(r.Context(), scope, w.Header().Get("X-Request-ID"))
 		if err != nil {
@@ -308,42 +308,143 @@ func (a *API) sync(w http.ResponseWriter, r *http.Request) {
 	a.startSync(scope, running.RunID)
 	writeEnvelope(w, http.StatusAccepted, w.Header().Get("X-Request-ID"), scope, a.Store.Freshness(), a.Store.SyncStatus())
 }
+
+func (a *API) startStage(ctx context.Context, status *SyncStatus, name string) {
+	status.CurrentStage = name
+	a.Store.SetSyncStatus(*status)
+	if repository, ok := a.Repository.(SyncStageRepository); ok && status.RunID > 0 {
+		_ = repository.RecordSyncStage(ctx, SyncStage{RunID: status.RunID, Name: name, Status: "running", StartedAt: time.Now().UTC()})
+	}
+}
+
+func (a *API) completeStage(ctx context.Context, status *SyncStatus, name string, processed int) {
+	if !contains(status.CompletedStages, name) {
+		status.CompletedStages = append(status.CompletedStages, name)
+	}
+	if status.CurrentStage == name {
+		status.CurrentStage = ""
+	}
+	a.Store.SetSyncStatus(*status)
+	if repository, ok := a.Repository.(SyncStageRepository); ok && status.RunID > 0 {
+		_ = repository.RecordSyncStage(ctx, SyncStage{RunID: status.RunID, Name: name, Status: "success", ProcessedCount: processed, FinishedAt: time.Now().UTC()})
+	}
+}
+
+func (a *API) failStage(ctx context.Context, status *SyncStatus, name string, err error) {
+	status.Status = "failed"
+	status.CurrentStage = ""
+	status.Warning = err.Error()
+	if !contains(status.FailedStages, name) {
+		status.FailedStages = append(status.FailedStages, name)
+	}
+	status.FinishedAt = time.Now().UTC()
+	a.Store.SetSyncStatus(*status)
+	if repository, ok := a.Repository.(SyncStageRepository); ok && status.RunID > 0 {
+		_ = repository.RecordSyncStage(ctx, SyncStage{RunID: status.RunID, Name: name, Status: "failed", FailedCount: 1, Error: err.Error(), FinishedAt: status.FinishedAt})
+	}
+	a.persistSyncStatus(ctx, *status)
+}
+
 func (a *API) runSync(ctx context.Context, scope Scope, runID int64) {
 	status := a.Store.SyncStatus()
 	status.Scope = scope
-	season, weeks, teams, players, fixtures, checksum, err := a.Source.Snapshot(ctx)
+	status.RunID = runID
+	a.startStage(ctx, &status, "catalog")
+	catalog, catalogChecksum, err := a.Source.Bootstrap(ctx)
 	if err != nil {
-		status.Status = "failed"
-		status.Warning = err.Error()
-		status.FailedStages = []string{"snapshot"}
-		status.FinishedAt = time.Now().UTC()
-		a.Store.SetSyncStatus(status)
-		if a.Repository != nil {
-			a.persistSyncStatus(ctx, status)
-		}
+		a.failStage(ctx, &status, "catalog", err)
 		return
 	}
-	status.CompletedStages = append(status.CompletedStages, "snapshot")
-	status.CurrentStage = "player-history"
-	a.Store.SetSyncStatus(status)
-	if syncRepository, ok := a.Repository.(SyncWorkRepository); ok && runID > 0 {
-		items := make([]SyncWorkItem, 0, len(players))
-		for _, player := range players {
-			items = append(items, SyncWorkItem{Scope: "player-history", NaturalKey: fmt.Sprintf("player-history:%d:%d", season.ID, player.ID), Endpoint: fmt.Sprintf("/element-summary/%d/", player.ID), SeasonSourceID: season.ID, EntitySourceID: player.ID})
-		}
-		if err := syncRepository.EnqueueSyncWork(ctx, runID, items); err != nil {
-			status.Status = "failed"
-			status.Warning = fmt.Sprintf("sync work queue persistence failed: %v", err)
-			status.FailedStages = append(status.FailedStages, "work-queue")
-			status.FinishedAt = time.Now().UTC()
-			a.Store.SetSyncStatus(status)
-			a.persistSyncStatus(ctx, status)
+	a.completeStage(ctx, &status, "catalog", len(catalog.Elements)+len(catalog.Teams)+len(catalog.Events))
+
+	fixtureFeed := FixtureFeed{Fixtures: []SourceFixture{}}
+	fixtureChecksum := ""
+	needsFixtures := scope.Dataset != "catalog"
+	if needsFixtures {
+		a.startStage(ctx, &status, "fixtures")
+		fixtureFeed, fixtureChecksum, err = a.Source.Fixtures(ctx, scope.Gameweek)
+		if err != nil {
+			a.failStage(ctx, &status, "fixtures", err)
 			return
 		}
+		a.completeStage(ctx, &status, "fixtures", len(fixtureFeed.Fixtures))
 	}
-	histories, failedStages := a.syncHistories(ctx, players, runID)
-	status.FailedStages = append(status.FailedStages, failedStages...)
+	season, weeks, teams, players, fixtures, err := a.Source.NormalizeSnapshot(catalog, fixtureFeed)
+	if err != nil {
+		a.failStage(ctx, &status, "catalog", err)
+		return
+	}
+	checksum := catalogChecksum
+	if fixtureChecksum != "" {
+		checksum += ":" + fixtureChecksum
+	}
+
+	liveGameweek := scope.Gameweek
+	if liveGameweek == 0 {
+		for _, event := range catalog.Events {
+			if event.IsCurrent {
+				liveGameweek = event.ID
+				break
+			}
+		}
+	}
+	var live EventLive
+	needsLive := scope.Dataset == "live" || scope.Dataset == "full"
+	if needsLive {
+		if liveGameweek == 0 && scope.Dataset == "live" {
+			a.failStage(ctx, &status, "live", fmt.Errorf("live sync requires a gameweek when no current event is available"))
+			return
+		}
+		if liveGameweek > 0 {
+			a.startStage(ctx, &status, "live")
+			var liveChecksum string
+			live, liveChecksum, err = a.Source.EventLive(ctx, liveGameweek)
+			if err != nil {
+				a.failStage(ctx, &status, "live", err)
+				return
+			}
+			checksum += ":" + liveChecksum
+			a.completeStage(ctx, &status, "live", len(live.Elements))
+		}
+	}
+
+	histories := map[int][]PlayerHistory{}
+	failedStages := []string{}
+	needsHistories := scope.Dataset == "player-history" || scope.Dataset == "full"
+	if needsHistories {
+		a.startStage(ctx, &status, "player-history")
+		if syncRepository, ok := a.Repository.(SyncWorkRepository); ok && runID > 0 {
+			items := make([]SyncWorkItem, 0, len(players))
+			for _, player := range players {
+				items = append(items, SyncWorkItem{Scope: "player-history", NaturalKey: fmt.Sprintf("player-history:%d:%d", season.ID, player.ID), Endpoint: fmt.Sprintf("/element-summary/%d/", player.ID), SeasonSourceID: season.ID, EntitySourceID: player.ID})
+			}
+			if err := syncRepository.EnqueueSyncWork(ctx, runID, items); err != nil {
+				a.failStage(ctx, &status, "player-history", fmt.Errorf("sync work queue persistence failed: %w", err))
+				return
+			}
+		}
+		histories, failedStages = a.syncHistories(ctx, players, runID)
+		status.FailedStages = append(status.FailedStages, failedStages...)
+		if len(failedStages) == 0 {
+			a.completeStage(ctx, &status, "player-history", len(histories))
+		} else {
+			status.CurrentStage = ""
+			if repository, ok := a.Repository.(SyncStageRepository); ok && status.RunID > 0 {
+				_ = repository.RecordSyncStage(ctx, SyncStage{RunID: status.RunID, Name: "player-history", Status: "partial", ProcessedCount: len(histories), FailedCount: len(failedStages), Error: fmt.Sprintf("%d player history requests failed", len(failedStages)), FinishedAt: time.Now().UTC()})
+			}
+		}
+	}
+
 	failures := len(failedStages)
+	existing := a.Store.ExportSnapshot()
+	if !needsFixtures {
+		fixtures = existing.Fixtures
+	} else if scope.Gameweek > 0 && scope.Dataset != "full" {
+		fixtures = mergeFixtures(existing.Fixtures, fixtures, scope.Gameweek)
+	}
+	if !needsHistories {
+		histories = existing.Histories
+	}
 	snapshot := Snapshot{Season: season, Gameweeks: weeks, Teams: teams, Players: players, Fixtures: fixtures, Histories: histories, Checksum: checksum}
 	if a.Repository != nil {
 		if err := a.Repository.UpsertSnapshot(ctx, snapshot); err != nil {
@@ -372,6 +473,22 @@ func (a *API) runSync(ctx context.Context, scope Scope, runID int64) {
 			return
 		}
 	}
+	if factRepository, ok := a.Repository.(WarehouseFactRepository); ok {
+		observedAt := time.Now().UTC()
+		if needsFixtures {
+			if err := factRepository.UpsertFixtureStats(ctx, season.ID, observedAt, fixtureFeed.Fixtures); err != nil {
+				a.failStage(ctx, &status, "fixtures", fmt.Errorf("fixture statistics persistence failed: %w", err))
+				return
+			}
+		}
+		if needsLive && liveGameweek > 0 {
+			finalized := liveFinalized(catalog.Events, liveGameweek, live.Finalized)
+			if err := factRepository.UpsertLiveGameweek(ctx, snapshotID, season.ID, liveGameweek, finalized, observedAt, live.Elements); err != nil {
+				a.failStage(ctx, &status, "live", fmt.Errorf("live gameweek persistence failed: %w", err))
+				return
+			}
+		}
+	}
 	a.Store.ApplySnapshot(season, weeks, teams, players, fixtures, histories)
 	status.CurrentStage = ""
 	status.FinishedAt = time.Now().UTC()
@@ -386,14 +503,34 @@ func (a *API) runSync(ctx context.Context, scope Scope, runID int64) {
 		status.Warning = fmt.Sprintf("%d player history requests failed; last known good data was retained where available", failures)
 	} else {
 		status.Status = "success"
-		status.CompletedStages = append(status.CompletedStages, "player-history")
 		status.Warning = ""
 	}
-	_ = checksum
 	a.Store.SetSyncStatus(status)
 	if a.Repository != nil {
 		a.persistSyncStatus(ctx, status)
 	}
+}
+
+func mergeFixtures(existing, incoming []Fixture, gameweek int) []Fixture {
+	merged := make([]Fixture, 0, len(existing)+len(incoming))
+	for _, fixture := range existing {
+		if fixture.Gameweek != gameweek {
+			merged = append(merged, fixture)
+		}
+	}
+	return append(merged, incoming...)
+}
+
+func liveFinalized(events []SourceEvent, gameweek int, sourceValue *bool) bool {
+	if sourceValue != nil {
+		return *sourceValue
+	}
+	for _, event := range events {
+		if event.ID == gameweek {
+			return event.Finished && event.DataChecked
+		}
+	}
+	return false
 }
 
 func (a *API) persistSyncStatus(ctx context.Context, status SyncStatus) {

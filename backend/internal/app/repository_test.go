@@ -39,6 +39,7 @@ func TestPostgresRepositoryPersistence(t *testing.T) {
 
 	store := NewStore()
 	snapshot := store.ExportSnapshot()
+	snapshot.Fixtures = []Fixture{{ID: 101, Gameweek: 1, HomeTeam: 1, AwayTeam: 2, HomeDifficulty: 2, AwayDifficulty: 4}}
 	snapshot.Checksum = "demo-checksum"
 	if err := repository.UpsertSnapshot(ctx, snapshot); err != nil {
 		t.Fatal(err)
@@ -58,7 +59,8 @@ func TestPostgresRepositoryPersistence(t *testing.T) {
 	if seasonCount != 1 || playerCount != len(snapshot.Players) {
 		t.Fatalf("upsert duplicated data: seasons=%d players=%d", seasonCount, playerCount)
 	}
-	if err := repository.CreateDatasetSnapshot(ctx, DatasetSnapshot{ID: newSnapshotID(), Dataset: "player-gameweek", State: "actual", SeasonID: snapshot.Season.ID, Gameweek: 1, SourceFetchedAt: time.Now().UTC(), NormalizedAt: time.Now().UTC(), NormalizerVersion: "fpl-public-v1"}); err != nil {
+	datasetSnapshotID := newSnapshotID()
+	if err := repository.CreateDatasetSnapshot(ctx, DatasetSnapshot{ID: datasetSnapshotID, Dataset: "player-gameweek", State: "actual", SeasonID: snapshot.Season.ID, Gameweek: 1, SourceFetchedAt: time.Now().UTC(), NormalizedAt: time.Now().UTC(), NormalizerVersion: "fpl-public-v1"}); err != nil {
 		t.Fatal(err)
 	}
 	snapshots, err := repository.ListDatasetSnapshots(ctx, Scope{SeasonID: snapshot.Season.ID, Gameweek: 1, Dataset: "player-gameweek"})
@@ -68,6 +70,25 @@ func TestPostgresRepositoryPersistence(t *testing.T) {
 	freshness, err := repository.CurrentDatasetFreshness(ctx, Scope{SeasonID: snapshot.Season.ID, Gameweek: 1, Dataset: "player-gameweek"})
 	if err != nil || freshness.State != "actual" || len(freshness.SnapshotIDs) != 1 || freshness.NormalizerVersion != "fpl-public-v1" {
 		t.Fatalf("unexpected dataset freshness: %#v err=%v", freshness, err)
+	}
+	fixture := snapshot.Fixtures[0]
+	player := snapshot.Players[0]
+	observedAt := time.Now().UTC().Truncate(time.Microsecond)
+	if err := repository.UpsertFixtureStats(ctx, snapshot.Season.ID, observedAt, []SourceFixture{{ID: fixture.ID, Stats: []SourceFixtureStat{{Identifier: "goals_scored", Home: []SourceStatValue{{Element: player.ID, Value: 1}}}}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.UpsertLiveGameweek(ctx, datasetSnapshotID, snapshot.Season.ID, 1, true, observedAt, []LivePlayerStats{{PlayerID: player.ID, Minutes: 90, Points: 9, Goals: 1, ExpectedGoals: "0.75"}}); err != nil {
+		t.Fatal(err)
+	}
+	var fixtureStatCount, liveFactCount int
+	if err := database.QueryRowContext(ctx, `SELECT COUNT(*) FROM fixture_stats WHERE stat_type='goals_scored' AND stat_value=1`).Scan(&fixtureStatCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRowContext(ctx, `SELECT COUNT(*) FROM player_gameweek_facts WHERE snapshot_id=$1 AND finalized AND total_points=9`, datasetSnapshotID).Scan(&liveFactCount); err != nil {
+		t.Fatal(err)
+	}
+	if fixtureStatCount != 1 || liveFactCount != 1 {
+		t.Fatalf("warehouse facts not persisted: fixture=%d live=%d", fixtureStatCount, liveFactCount)
 	}
 	players, total, err := repository.SearchPlayers(ctx, PlayerQuery{Sort: "form", Desc: true, Page: 1, PageSize: 3})
 	if err != nil || len(players) != 3 || total != len(snapshot.Players) {
@@ -188,6 +209,12 @@ func TestPostgresSyncWorkQueueClaimsIdempotently(t *testing.T) {
 	if _, duplicateErr := repository.StartSyncRun(ctx, scope, "duplicate-request"); duplicateErr == nil {
 		t.Fatal("expected duplicate active sync scope to be rejected")
 	}
+	if err := repository.RecordSyncStage(ctx, SyncStage{RunID: runID, Name: "catalog", Status: "running", StartedAt: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.RecordSyncStage(ctx, SyncStage{RunID: runID, Name: "catalog", Status: "success", ProcessedCount: 3, FinishedAt: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
 	if err := repository.EnqueueSyncWork(ctx, runID, []SyncWorkItem{{Scope: "player-history", NaturalKey: "test:1", Endpoint: "/element-summary/1/", EntitySourceID: 1}}); err != nil {
 		t.Fatal(err)
 	}
@@ -222,7 +249,7 @@ func TestPostgresSyncWorkQueueClaimsIdempotently(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.RunID != runID || loaded.Status != "success" || loaded.CorrelationID != "test-request" || loaded.TotalWork != 1 || loaded.CompletedWork != 1 || loaded.FailedWork != 0 || loaded.RetryableWork != 0 {
+	if loaded.RunID != runID || loaded.Status != "success" || loaded.CorrelationID != "test-request" || loaded.TotalWork != 1 || loaded.CompletedWork != 1 || loaded.FailedWork != 0 || loaded.RetryableWork != 0 || strings.Join(loaded.CompletedStages, ",") != "catalog" {
 		t.Fatalf("unexpected persisted sync status: %#v", loaded)
 	}
 	afterCompletionRun, err := repository.StartSyncRun(ctx, scope, "after-completion")
