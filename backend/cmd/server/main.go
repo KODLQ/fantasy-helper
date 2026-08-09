@@ -54,6 +54,13 @@ func main() {
 		return database.PingContext(ctx) == nil
 	}, logger, repository)
 	api.SyncWorkers = cfg.SyncWorkers
+	schedulerCtx, stopScheduler := context.WithCancel(context.Background())
+	defer stopScheduler()
+	if cfg.SchedulerEnabled {
+		scheduler := app.NewSyncScheduler(api, store.CurrentGameweek, app.SyncSchedule{Tick: cfg.SchedulerTick, Catalog: cfg.CatalogCadence, Fixtures: cfg.FixtureCadence, Live: cfg.LiveCadence, Finalization: cfg.FinalizationCadence, HistoricalReconcile: cfg.ReconcileCadence})
+		go scheduler.Run(schedulerCtx)
+		logger.Info("sync scheduler enabled", "catalogCadence", cfg.CatalogCadence, "fixtureCadence", cfg.FixtureCadence, "liveCadence", cfg.LiveCadence, "finalizationCadence", cfg.FinalizationCadence, "reconcileCadence", cfg.ReconcileCadence)
+	}
 	server := &http.Server{Addr: ":" + cfg.Port, Handler: api.Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
@@ -65,6 +72,7 @@ func main() {
 		}
 	}()
 	<-stop
+	stopScheduler()
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer cancel()
 	_ = api.Shutdown(ctx)

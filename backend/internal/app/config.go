@@ -24,6 +24,13 @@ type Config struct {
 	SourceRetryJitter   time.Duration
 	SourceMaxConcurrent int
 	SyncWorkers         int
+	SchedulerEnabled    bool
+	SchedulerTick       time.Duration
+	CatalogCadence      time.Duration
+	FixtureCadence      time.Duration
+	LiveCadence         time.Duration
+	FinalizationCadence time.Duration
+	ReconcileCadence    time.Duration
 	Environment         string
 	DatabaseMaxConns    int
 	DatabaseMaxIdle     int
@@ -73,6 +80,15 @@ func LoadConfig() (Config, error) {
 	if maxConcurrent < 1 {
 		return Config{}, fmt.Errorf("FPL_SOURCE_MAX_CONCURRENT must be positive")
 	}
+	schedulerTick := envDuration("SYNC_SCHEDULER_TICK", time.Minute)
+	catalogCadence := envDuration("SYNC_CATALOG_CADENCE", time.Hour)
+	fixtureCadence := envDuration("SYNC_FIXTURE_CADENCE", time.Hour)
+	liveCadence := envDuration("SYNC_LIVE_CADENCE", 5*time.Minute)
+	finalizationCadence := envDuration("SYNC_FINALIZATION_CADENCE", 15*time.Minute)
+	reconcileCadence := envDuration("SYNC_RECONCILE_CADENCE", 24*time.Hour)
+	if schedulerTick <= 0 || catalogCadence <= 0 || fixtureCadence <= 0 || liveCadence <= 0 || finalizationCadence <= 0 || reconcileCadence <= 0 {
+		return Config{}, fmt.Errorf("sync scheduler tick and cadence durations must be positive")
+	}
 	return Config{
 		Port:                configEnv("BACKEND_PORT", "8080"),
 		DatabaseURL:         os.Getenv("DATABASE_URL"),
@@ -85,6 +101,13 @@ func LoadConfig() (Config, error) {
 		SourceRetryJitter:   envDuration("FPL_SOURCE_RETRY_JITTER", 100*time.Millisecond),
 		SourceMaxConcurrent: maxConcurrent,
 		SyncWorkers:         workers,
+		SchedulerEnabled:    envBool("SYNC_SCHEDULER_ENABLED", false),
+		SchedulerTick:       schedulerTick,
+		CatalogCadence:      catalogCadence,
+		FixtureCadence:      fixtureCadence,
+		LiveCadence:         liveCadence,
+		FinalizationCadence: finalizationCadence,
+		ReconcileCadence:    reconcileCadence,
 		Environment:         configEnv("APP_ENV", "local"),
 		DatabaseMaxConns:    maxConns,
 		DatabaseMaxIdle:     maxIdle,

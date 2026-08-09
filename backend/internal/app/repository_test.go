@@ -77,8 +77,20 @@ func TestPostgresRepositoryPersistence(t *testing.T) {
 	if err := repository.UpsertFixtureStats(ctx, snapshot.Season.ID, observedAt, []SourceFixture{{ID: fixture.ID, Stats: []SourceFixtureStat{{Identifier: "goals_scored", Home: []SourceStatValue{{Element: player.ID, Value: 1}}}}}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := repository.UpsertLiveGameweek(ctx, datasetSnapshotID, snapshot.Season.ID, 1, true, observedAt, []LivePlayerStats{{PlayerID: player.ID, Minutes: 90, Points: 9, Goals: 1, ExpectedGoals: "0.75"}}); err != nil {
+	livePlayers := []LivePlayerStats{{PlayerID: player.ID, Minutes: 90, Points: 9, Goals: 1, ExpectedGoals: "0.75"}}
+	if unchanged, err := repository.LiveGameweekFactsUnchanged(ctx, snapshot.Season.ID, 1, livePlayers); err != nil || unchanged {
+		t.Fatalf("first live observation should not be stable: unchanged=%v err=%v", unchanged, err)
+	}
+	if err := repository.UpsertLiveGameweek(ctx, datasetSnapshotID, snapshot.Season.ID, 1, true, observedAt, livePlayers); err != nil {
 		t.Fatal(err)
+	}
+	if unchanged, err := repository.LiveGameweekFactsUnchanged(ctx, snapshot.Season.ID, 1, livePlayers); err != nil || !unchanged {
+		t.Fatalf("repeated live observation should be stable: unchanged=%v err=%v", unchanged, err)
+	}
+	changedPlayers := append([]LivePlayerStats{}, livePlayers...)
+	changedPlayers[0].Points++
+	if unchanged, err := repository.LiveGameweekFactsUnchanged(ctx, snapshot.Season.ID, 1, changedPlayers); err != nil || unchanged {
+		t.Fatalf("changed live observation should not be stable: unchanged=%v err=%v", unchanged, err)
 	}
 	var fixtureStatCount, liveFactCount int
 	if err := database.QueryRowContext(ctx, `SELECT COUNT(*) FROM fixture_stats WHERE stat_type='goals_scored' AND stat_value=1`).Scan(&fixtureStatCount); err != nil {

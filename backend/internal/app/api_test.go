@@ -216,10 +216,19 @@ func TestMergeFixturesReplacesOnlyRequestedGameweek(t *testing.T) {
 
 func TestLiveFinalizedUsesExplicitSourceThenCheckedEvent(t *testing.T) {
 	value := false
-	if liveFinalized([]SourceEvent{{ID: 1, Finished: true, DataChecked: true}}, 1, &value) {
-		t.Fatal("explicit provisional source state must win")
+	gameweek := 1
+	finishedFixtures := []SourceFixture{{ID: 1, Event: &gameweek, Finished: true}}
+	unfinishedFixtures := []SourceFixture{{ID: 1, Event: &gameweek, Finished: false}}
+	if liveFinalized([]SourceEvent{{ID: 1}}, finishedFixtures, 1, &value, true) {
+		t.Fatal("explicit provisional source state must remain provisional")
 	}
-	if !liveFinalized([]SourceEvent{{ID: 1, Finished: true, DataChecked: true}}, 1, nil) {
-		t.Fatal("finished and checked event should be finalized")
+	if liveFinalized([]SourceEvent{{ID: 1, Finished: true, DataChecked: true}}, unfinishedFixtures, 1, nil, true) {
+		t.Fatal("unfinished fixtures must prevent finalization")
+	}
+	if liveFinalized([]SourceEvent{{ID: 1, Finished: true, DataChecked: true}}, finishedFixtures, 1, nil, false) {
+		t.Fatal("changed facts must require a confirming refresh")
+	}
+	if !liveFinalized([]SourceEvent{{ID: 1, Finished: true, DataChecked: true}}, finishedFixtures, 1, nil, true) {
+		t.Fatal("stable checked event with finished fixtures should finalize")
 	}
 }

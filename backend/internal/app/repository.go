@@ -55,6 +55,7 @@ type SyncStageRepository interface {
 type WarehouseFactRepository interface {
 	UpsertFixtureStats(context.Context, int, time.Time, []SourceFixture) error
 	UpsertLiveGameweek(context.Context, string, int, int, bool, time.Time, []LivePlayerStats) error
+	LiveGameweekFactsUnchanged(context.Context, int, int, []LivePlayerStats) (bool, error)
 }
 
 type SourcePayloadRepository interface {
@@ -202,6 +203,38 @@ func (r *PostgresRepository) UpsertLiveGameweek(ctx context.Context, snapshotID 
 		}
 		return nil
 	})
+}
+
+func (r *PostgresRepository) LiveGameweekFactsUnchanged(ctx context.Context, seasonSourceID, gameweekSourceID int, incoming []LivePlayerStats) (bool, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT f.raw FROM player_gameweek_facts f JOIN dataset_snapshots d ON d.id=f.snapshot_id JOIN seasons s ON s.id=d.season_id JOIN gameweeks g ON g.id=f.gameweek_id WHERE s.source_id=$1 AND g.source_id=$2 AND d.id=(SELECT d2.id FROM dataset_snapshots d2 JOIN seasons s2 ON s2.id=d2.season_id JOIN gameweeks g2 ON g2.id=d2.gameweek_id WHERE s2.source_id=$1 AND g2.source_id=$2 ORDER BY d2.normalized_at DESC, d2.id DESC LIMIT 1) ORDER BY f.player_id`, seasonSourceID, gameweekSourceID)
+	if err != nil {
+		return false, fmt.Errorf("load prior live gameweek facts: %w", err)
+	}
+	defer rows.Close()
+	prior := map[int]LivePlayerStats{}
+	for rows.Next() {
+		var raw []byte
+		if err := rows.Scan(&raw); err != nil {
+			return false, err
+		}
+		var player LivePlayerStats
+		if err := json.Unmarshal(raw, &player); err != nil {
+			return false, fmt.Errorf("decode prior live gameweek fact: %w", err)
+		}
+		prior[player.PlayerID] = player
+	}
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	if len(prior) == 0 || len(prior) != len(incoming) {
+		return false, nil
+	}
+	for _, player := range incoming {
+		if previous, ok := prior[player.PlayerID]; !ok || previous != player {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 func (r *PostgresRepository) LoadLatestSyncStatus(ctx context.Context) (SyncStatus, error) {

@@ -75,6 +75,17 @@ func (s *Store) Snapshot() (Season, Gameweek, time.Time) {
 	return s.season, s.gameweeks[1], s.lastSnapshot
 }
 
+func (s *Store) CurrentGameweek() Gameweek {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, gameweek := range s.gameweeks {
+		if gameweek.IsCurrent {
+			return gameweek
+		}
+	}
+	return Gameweek{}
+}
+
 func (s *Store) ApplySnapshot(season Season, weeks []Gameweek, teams []Team, players []Player, fixtures []Fixture, histories map[int][]PlayerHistory) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

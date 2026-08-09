@@ -21,6 +21,7 @@ type API struct {
 	Logger      *slog.Logger
 	Repository  Repository
 	SyncWorkers int
+	startMu     sync.Mutex
 	syncMu      sync.Mutex
 	syncCancels map[uint64]context.CancelFunc
 	syncWait    sync.WaitGroup
@@ -269,11 +270,6 @@ func (a *API) sync(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Use POST to start a sync.", nil)
 		return
 	}
-	current := a.Store.SyncStatus()
-	if current.Status == "running" {
-		writeError(w, http.StatusConflict, "sync_in_progress", "A sync is already running.", nil)
-		return
-	}
 	var request struct {
 		Scope    string `json:"scope"`
 		SeasonID int    `json:"seasonId"`
@@ -290,23 +286,36 @@ func (a *API) sync(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_sync_scope", "Scope must be catalog, fixtures, live, player-history, or full.", nil)
 		return
 	}
-	started := time.Now().UTC()
 	scope := Scope{SeasonID: request.SeasonID, Gameweek: request.Gameweek, Dataset: request.Scope}
-	running := SyncStatus{Status: "running", Scope: scope, CurrentStage: "catalog", CorrelationID: w.Header().Get("X-Request-ID"), StartedAt: started, CompletedStages: []string{}, FailedStages: []string{}, Freshness: a.Store.Freshness()}
+	running, err := a.StartScopedSync(r.Context(), scope, w.Header().Get("X-Request-ID"))
+	if err != nil {
+		writeError(w, http.StatusConflict, "sync_scope_unavailable", "An equivalent sync scope is already running or could not be started.", nil)
+		return
+	}
+	writeEnvelope(w, http.StatusAccepted, w.Header().Get("X-Request-ID"), scope, a.Store.Freshness(), running)
+}
+
+func (a *API) StartScopedSync(ctx context.Context, scope Scope, correlationID string) (SyncStatus, error) {
+	a.startMu.Lock()
+	defer a.startMu.Unlock()
+	if a.Store.SyncStatus().Status == "running" {
+		return SyncStatus{}, fmt.Errorf("sync already running")
+	}
+	started := time.Now().UTC()
+	running := SyncStatus{Status: "running", Scope: scope, CurrentStage: "catalog", CorrelationID: correlationID, StartedAt: started, CompletedStages: []string{}, FailedStages: []string{}, Freshness: a.Store.Freshness()}
 	if syncRepository, ok := a.Repository.(SyncWorkRepository); ok {
-		runID, err := syncRepository.StartSyncRun(r.Context(), scope, w.Header().Get("X-Request-ID"))
+		runID, err := syncRepository.StartSyncRun(ctx, scope, correlationID)
 		if err != nil {
-			writeError(w, http.StatusConflict, "sync_scope_unavailable", "An equivalent sync scope is already running or could not be started.", nil)
-			return
+			return SyncStatus{}, err
 		}
 		running.RunID = runID
 	}
 	a.Store.SetSyncStatus(running)
 	if a.Repository != nil && running.RunID == 0 {
-		_ = a.Repository.RecordSyncStatus(r.Context(), running)
+		_ = a.Repository.RecordSyncStatus(ctx, running)
 	}
 	a.startSync(scope, running.RunID)
-	writeEnvelope(w, http.StatusAccepted, w.Header().Get("X-Request-ID"), scope, a.Store.Freshness(), a.Store.SyncStatus())
+	return running, nil
 }
 
 func (a *API) startStage(ctx context.Context, status *SyncStatus, name string) {
@@ -457,13 +466,26 @@ func (a *API) runSync(ctx context.Context, scope Scope, runID int64) {
 			return
 		}
 	}
+	factRepository, hasFactRepository := a.Repository.(WarehouseFactRepository)
+	liveFactsUnchanged := false
+	if hasFactRepository && needsLive && liveGameweek > 0 {
+		liveFactsUnchanged, err = factRepository.LiveGameweekFactsUnchanged(ctx, season.ID, liveGameweek, live.Elements)
+		if err != nil {
+			a.failStage(ctx, &status, "live", fmt.Errorf("live finalization check failed: %w", err))
+			return
+		}
+	}
 	snapshotID := newSnapshotID()
 	if snapshotRepository, ok := a.Repository.(DatasetSnapshotRepository); ok {
 		state := "actual"
 		if len(failedStages) > 0 {
 			state = "partial"
 		}
-		if err := snapshotRepository.CreateDatasetSnapshot(ctx, DatasetSnapshot{ID: snapshotID, Dataset: "public-fpl", State: state, SeasonID: season.ID, NormalizedAt: time.Now().UTC(), SourceFetchedAt: time.Now().UTC(), NormalizerVersion: "fpl-public-v1", MissingInputs: append([]string{}, failedStages...)}); err != nil {
+		snapshotGameweek := scope.Gameweek
+		if needsLive {
+			snapshotGameweek = liveGameweek
+		}
+		if err := snapshotRepository.CreateDatasetSnapshot(ctx, DatasetSnapshot{ID: snapshotID, Dataset: "public-fpl", State: state, SeasonID: season.ID, Gameweek: snapshotGameweek, NormalizedAt: time.Now().UTC(), SourceFetchedAt: time.Now().UTC(), NormalizerVersion: "fpl-public-v1", MissingInputs: append([]string{}, failedStages...)}); err != nil {
 			status.Status = "failed"
 			status.Warning = fmt.Sprintf("dataset snapshot persistence failed: %v", err)
 			status.FailedStages = append(status.FailedStages, "dataset-snapshot")
@@ -473,7 +495,7 @@ func (a *API) runSync(ctx context.Context, scope Scope, runID int64) {
 			return
 		}
 	}
-	if factRepository, ok := a.Repository.(WarehouseFactRepository); ok {
+	if hasFactRepository {
 		observedAt := time.Now().UTC()
 		if needsFixtures {
 			if err := factRepository.UpsertFixtureStats(ctx, season.ID, observedAt, fixtureFeed.Fixtures); err != nil {
@@ -482,7 +504,7 @@ func (a *API) runSync(ctx context.Context, scope Scope, runID int64) {
 			}
 		}
 		if needsLive && liveGameweek > 0 {
-			finalized := liveFinalized(catalog.Events, liveGameweek, live.Finalized)
+			finalized := liveFinalized(catalog.Events, fixtureFeed.Fixtures, liveGameweek, live.Finalized, liveFactsUnchanged)
 			if err := factRepository.UpsertLiveGameweek(ctx, snapshotID, season.ID, liveGameweek, finalized, observedAt, live.Elements); err != nil {
 				a.failStage(ctx, &status, "live", fmt.Errorf("live gameweek persistence failed: %w", err))
 				return
@@ -521,16 +543,30 @@ func mergeFixtures(existing, incoming []Fixture, gameweek int) []Fixture {
 	return append(merged, incoming...)
 }
 
-func liveFinalized(events []SourceEvent, gameweek int, sourceValue *bool) bool {
+func liveFinalized(events []SourceEvent, fixtures []SourceFixture, gameweek int, sourceValue *bool, unchanged bool) bool {
+	sourceFinished := false
 	if sourceValue != nil {
-		return *sourceValue
+		sourceFinished = *sourceValue
 	}
 	for _, event := range events {
 		if event.ID == gameweek {
-			return event.Finished && event.DataChecked
+			sourceFinished = sourceFinished || (event.Finished && event.DataChecked)
+			break
 		}
 	}
-	return false
+	if !sourceFinished || !unchanged || len(fixtures) == 0 {
+		return false
+	}
+	foundGameweekFixture := false
+	for _, fixture := range fixtures {
+		if fixture.Event != nil && *fixture.Event == gameweek {
+			foundGameweekFixture = true
+			if !fixture.Finished {
+				return false
+			}
+		}
+	}
+	return foundGameweekFixture
 }
 
 func (a *API) persistSyncStatus(ctx context.Context, status SyncStatus) {

@@ -28,11 +28,11 @@
 - [x] 3.2 Implement durable work-item claiming, retry counts, backoff, `Retry-After`, and restart recovery.
 - [x] 3.3 Add bounded concurrency and configurable request timeouts without blocking unrelated stages.
 - [x] 3.4 Implement idempotent canonical upserts and last-known-good retention for failed work.
-- [ ] 3.5 Add current-gameweek incremental refresh and completed-gameweek finalization.
-- [ ] 3.6 Add manual sync controls and an in-process scheduler configuration.
+- [x] 3.5 Add current-gameweek incremental refresh and completed-gameweek finalization.
+- [x] 3.6 Add manual sync controls and an in-process scheduler configuration.
 - [x] 3.7 Add scope locks and duplicate-run prevention for equivalent season/gameweek datasets.
 - [x] 3.8 Add configurable timeout, retry, jitter, `Retry-After`, and per-host concurrency behavior with metrics.
-- [ ] 3.9 Add catalog, fixture, live, finalization, and reconciliation cadence policies with scheduler tests.
+- [x] 3.9 Add catalog, fixture, live, finalization, and reconciliation cadence policies with scheduler tests.
 - [x] 3.10 Add coordinator cancellation, shutdown wait, correlation IDs, sync metrics, and duplicate-scope locking.
 - [ ] 3.11 Batch snapshot/history writes and test last-known-good merge plus explicit cache refresh after commit.
 

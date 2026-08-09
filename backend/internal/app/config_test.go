@@ -14,15 +14,27 @@ func TestLoadConfigSourceTransportPolicy(t *testing.T) {
 	t.Setenv("FPL_SOURCE_RETRY_JITTER", "275ms")
 	t.Setenv("FPL_SOURCE_MAX_CONCURRENT", "3")
 	t.Setenv("SYNC_WORKERS", "5")
+	t.Setenv("SYNC_SCHEDULER_ENABLED", "true")
+	t.Setenv("SYNC_SCHEDULER_TICK", "30s")
+	t.Setenv("SYNC_CATALOG_CADENCE", "1h")
+	t.Setenv("SYNC_FIXTURE_CADENCE", "45m")
+	t.Setenv("SYNC_LIVE_CADENCE", "5m")
+	t.Setenv("SYNC_FINALIZATION_CADENCE", "10m")
+	t.Setenv("SYNC_RECONCILE_CADENCE", "12h")
 	cfg, err := LoadConfig()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.SourceRetries != 4 || cfg.SourceRetryJitter != 275*time.Millisecond || cfg.SourceMaxConcurrent != 3 || cfg.SyncWorkers != 5 {
+	if cfg.SourceRetries != 4 || cfg.SourceRetryJitter != 275*time.Millisecond || cfg.SourceMaxConcurrent != 3 || cfg.SyncWorkers != 5 || !cfg.SchedulerEnabled || cfg.SchedulerTick != 30*time.Second || cfg.FixtureCadence != 45*time.Minute || cfg.ReconcileCadence != 12*time.Hour {
 		t.Fatalf("unexpected source transport configuration: %#v", cfg)
 	}
 	t.Setenv("FPL_SOURCE_MAX_CONCURRENT", "0")
 	if _, err := LoadConfig(); err == nil {
 		t.Fatal("expected zero source concurrency to be rejected")
+	}
+	t.Setenv("FPL_SOURCE_MAX_CONCURRENT", "3")
+	t.Setenv("SYNC_LIVE_CADENCE", "-1m")
+	if _, err := LoadConfig(); err == nil {
+		t.Fatal("expected negative scheduler cadence to be rejected")
 	}
 }

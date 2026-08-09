@@ -29,6 +29,8 @@ Use `make logs ENV=local` to follow service output and `make config ENV=local` t
 
 The application starts with a small deterministic demo snapshot so the workspace is useful before the first official sync. Use “Sync official data” to import the configured FPL endpoints. Set `FPL_SOURCE_SEASON_ID` and `FPL_SOURCE_SEASON_NAME` together for an explicit season; discovery mode is supported when the upstream bootstrap payload includes season metadata. Transport behavior is controlled with `FPL_SOURCE_TIMEOUT`, `FPL_SOURCE_RETRIES`, `FPL_SOURCE_RETRY_JITTER`, and `FPL_SOURCE_MAX_CONCURRENT`; retryable responses use exponential backoff, honor `Retry-After`, and expose redacted counters through the source adapter metrics.
 
+Scheduled synchronization is disabled by default until an initial manual sync has been verified. Enable it with `SYNC_SCHEDULER_ENABLED=true`. Catalog and fixtures default to hourly refreshes, live gameweeks to five-minute refreshes, post-match finalization to fifteen-minute confirmation refreshes, and historical reconciliation to daily runs. Configure these with `SYNC_CATALOG_CADENCE`, `SYNC_FIXTURE_CADENCE`, `SYNC_LIVE_CADENCE`, `SYNC_FINALIZATION_CADENCE`, and `SYNC_RECONCILE_CADENCE`; `SYNC_SCHEDULER_TICK` controls how often due policies are evaluated. Scope locking prevents the scheduler from overlapping an active manual or scheduled run.
+
 ## API surface
 
 - `GET /healthz` — service, database-network, and data status.
