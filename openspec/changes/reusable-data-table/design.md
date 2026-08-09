@@ -37,11 +37,17 @@ Each column declares an ID, header, cell renderer, optional sort key, and option
 
 The generic component works with string sort keys and filter values. Player research maps those values to the established API names (`search`, `position`, `minPrice`, `maxPrice`, `minForm`, `minPoints`, `minMinutes`, `minValue`, and `status`). Any filter, sort, or page-size change resets the page to one; page navigation alone preserves the current query.
 
-### 4. Make pagination deterministic
+### 4. Use authoritative season team metadata
+
+The player endpoint returns each paged item as its source player record paired with its source team record, plus the complete selected-season team catalogue for filter options. The frontend does not translate IDs through fixed arrays, invent generic club names, or assume the same clubs across seasons. A missing player-team relationship is a server data-integrity error rather than a plausible-looking UI fallback.
+
+Player names, positions, prices, form, points, minutes, value, availability, and club identity are rendered directly from the selected season's API response. Dynamic player counts use response totals rather than demo constants. The retained demo dataset remains valid test data, but no production presentation logic knows its names.
+
+### 5. Make pagination deterministic
 
 The component computes total pages from server-provided `total` and `pageSize`, disables boundary actions, provides first/previous/next/last controls, and renders a bounded page-number window around the current page. The feature accepts the API's resolved `page` and `pageSize`, preventing UI drift if the server clamps values.
 
-### 5. Preserve accessibility and explicit data states
+### 6. Preserve accessibility and explicit data states
 
 Sortable headers are buttons inside `th` elements with `aria-sort`. Every filter has a column-specific accessible label. Loading, errors, and empty results use one full-width row. Pagination exposes textual result range and labelled controls; the table receives an accessible caption.
 
@@ -51,6 +57,7 @@ Sortable headers are buttons inside `th` elements with `aria-sort`. Every filter
 - [Rapid filters can issue excessive requests] → Preserve the existing debounce and abort stale requests.
 - [A page can become invalid after filtering] → Reset to page one for query changes and clamp against the returned total-page count.
 - [Generic cell renderers can reduce consistency] → Centralize table structure and controls while leaving domain formatting intentionally feature-owned.
+- [A player references missing team metadata] → Reject the inconsistent response with a non-disclosing data-integrity error instead of displaying a fabricated club label.
 
 ## Migration Plan
 

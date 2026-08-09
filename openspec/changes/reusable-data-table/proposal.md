@@ -8,6 +8,7 @@ The player research table hard-codes its headers, rows, filters, sort indicator,
 - Support text, select, minimum-number, and numeric-range filters only on columns that declare those controls.
 - Make sortable headers keyboard-accessible and expose the active direction through `aria-sort` and a visible indicator.
 - Integrate the component into player research with server-side page, page-size, sort, and filter query parameters.
+- Return authoritative season-scoped team metadata with player research results so player rows, cards, and club filters never derive labels from demo mappings or numeric IDs.
 - Preserve the player card view while sharing the same server-side query state and pagination.
 - Add component-focused tests and Playwright coverage for filtering, bidirectional sorting, page-size changes, and page navigation.
 
@@ -24,5 +25,5 @@ The player research table hard-codes its headers, rows, filters, sort indicator,
 ## Impact
 
 - Adds a shared component and styles under `frontend/src/components`.
-- Refactors `frontend/src/features/research.tsx` to use controlled table state and the existing paginated `/api/v1/players` query contract.
-- Extends frontend unit and Playwright coverage without adding a third-party table dependency or changing the backend API.
+- Refactors `frontend/src/features/research.tsx` to use controlled table state and enriches the paginated `/api/v1/players` response with authoritative player-team relationships and the selected season's club catalogue.
+- Extends backend, frontend unit, and Playwright coverage without adding a third-party table dependency; the player-list response gains additive team metadata and an explicit player-team item shape.

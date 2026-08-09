@@ -239,6 +239,16 @@ func (s *Store) Team(id int) (Team, bool) {
 	team, ok := s.teams[id]
 	return team, ok
 }
+func (s *Store) AllTeams() []Team {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	result := make([]Team, 0, len(s.teams))
+	for _, team := range s.teams {
+		result = append(result, team)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
+	return result
+}
 func (s *Store) History(id int) []PlayerHistory {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

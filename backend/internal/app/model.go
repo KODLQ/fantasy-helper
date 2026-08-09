@@ -117,6 +117,11 @@ type Player struct {
 	RecentReturns     float64 `json:"recentReturns"`
 }
 
+type PlayerResearchItem struct {
+	Player Player `json:"player"`
+	Team   Team   `json:"team"`
+}
+
 type PlayerHistory struct {
 	Gameweek     int        `json:"gameweek"`
 	FixtureID    int        `json:"fixture,omitempty"`

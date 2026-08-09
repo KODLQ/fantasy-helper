@@ -6,17 +6,19 @@ const seasons = [
 ];
 
 const player = (seasonId: number) => ({ id: 10, firstName: 'Test', secondName: 'Player', webName: seasonId === 2026 ? 'Current Player' : 'Historical Player', position: 3, teamId: 1, price: 7, totalPoints: seasonId === 2026 ? 10 : 200, form: 5, minutes: 900, value: 10, status: 'a', news: '', expectedMinutes: 1, recentReturns: 0, goalsScored: 0, assists: 0, cleanSheets: 0, saves: 0 });
+const team = (seasonId: number) => ({ id: 1, name: seasonId === 2026 ? 'Current FC' : 'History FC', shortName: seasonId === 2026 ? 'CUR' : 'HIS' });
+const research = (seasonId: number) => ({ items: [{ player: player(seasonId), team: team(seasonId) }], teams: [team(seasonId)], total: 1, page: 1, pageSize: 25, freshness: { status: 'fresh', state: 'actual' } });
 
 async function mockMultiSeason(page: Page, delayCurrent = 0) {
   await page.route('**/api/v1/seasons', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: { items: seasons }, meta: { requestId: 'seasons' } }) }));
   await page.route('**/api/v1/players?*', async (route) => {
     const seasonId = Number(new URL(route.request().url()).searchParams.get('seasonId'));
     if (seasonId === 2026 && delayCurrent) await new Promise((resolve) => setTimeout(resolve, delayCurrent));
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: { items: [player(seasonId)], total: 1, page: 1, pageSize: 25, freshness: { status: 'fresh', state: 'actual' } }, meta: { requestId: `players-${seasonId}`, scope: { seasonId } } }) });
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: research(seasonId), meta: { requestId: `players-${seasonId}`, scope: { seasonId } } }) });
   });
   await page.route('**/api/v1/players/10?*', async (route) => {
     const seasonId = Number(new URL(route.request().url()).searchParams.get('seasonId'));
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: { player: player(seasonId), team: { name: seasonId === 2026 ? 'Current FC' : 'History FC', shortName: 'TST' }, history: [{ gameweek: 1, totalPoints: seasonId === 2026 ? 10 : 20, minutes: 90 }], fixtures: [{ homeTeam: 1, awayTeam: 2, homeDifficulty: seasonId === 2026 ? 2 : 5, awayDifficulty: 3 }], freshness: { status: 'fresh', state: 'actual' } }, meta: { requestId: `player-${seasonId}`, scope: { seasonId } } }) });
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: { player: player(seasonId), team: team(seasonId), history: [{ gameweek: 1, totalPoints: seasonId === 2026 ? 10 : 20, minutes: 90 }], fixtures: [{ homeTeam: 1, awayTeam: 2, homeDifficulty: seasonId === 2026 ? 2 : 5, awayDifficulty: 3 }], freshness: { status: 'fresh', state: 'actual' } }, meta: { requestId: `player-${seasonId}`, scope: { seasonId } } }) });
   });
 }
 
@@ -27,6 +29,8 @@ test.describe('multi-season navigation', () => {
     await expect(page.getByTestId('season-selector')).toHaveValue('2026');
     await expect(page).toHaveURL(/season=2026.*gameweek=1/);
     await expect(page.getByText('Current Player')).toBeVisible();
+    await expect(page.getByTestId('player-table')).toContainText('CUR');
+    await expect(page.getByLabel('Filter by club')).toHaveText(/Current FC/);
     await page.getByRole('button', { name: 'Current Player' }).click();
     await expect(page.getByTestId('player-drawer')).toContainText('Current FC');
     await expect(page.getByTestId('player-drawer')).toContainText('Difficulty 2/5');
@@ -44,6 +48,8 @@ test.describe('multi-season navigation', () => {
     await page.getByTestId('season-selector').selectOption('2025');
     await expect(page).toHaveURL(/season=2025.*gameweek=1/);
     await expect(page.getByText('Historical Player')).toBeVisible();
+    await expect(page.getByTestId('player-table')).toContainText('HIS');
+    await expect(page.getByLabel('Filter by club')).toHaveText(/History FC/);
     expect(syncRequests).toBe(0);
     await expect(page.getByRole('status', { name: '' }).filter({ hasText: 'Historical season' })).toBeVisible();
     await page.getByTestId('season-selector').selectOption('2026');
@@ -145,7 +151,7 @@ test.describe('multi-season navigation', () => {
         await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: { code: 'SEASON_DATA_UNAVAILABLE', message: 'Current catalogue unavailable.' } }) });
         return;
       }
-      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: { items: [player(seasonId)], total: 1, page: 1, pageSize: 25 }, meta: { requestId: 'recovered', scope: { seasonId } } }) });
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: research(seasonId), meta: { requestId: 'recovered', scope: { seasonId } } }) });
     });
     await page.goto('/?season=2026&gameweek=1');
     await expect(page.getByText('Current catalogue unavailable.')).toBeVisible();

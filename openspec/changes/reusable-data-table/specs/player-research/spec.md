@@ -34,3 +34,18 @@ The player research UI SHALL provide functional server-side pagination with sele
 #### Scenario: User changes player page size
 - **WHEN** the user selects a different supported page size
 - **THEN** the UI requests page one using that size and updates the displayed result range and page count
+
+### Requirement: Render authoritative player and club data
+The player research API SHALL pair every returned player with its selected-season team record and SHALL return the complete selected-season team catalogue used by club filters. The UI SHALL render player fields, club names, club abbreviations, player counts, and home/away fixture difficulty from authoritative responses without fixed demo mappings, generated club labels, hard-coded player totals, or fabricated fixture values.
+
+#### Scenario: Current-season clubs are displayed
+- **WHEN** the selected season contains official player and team records
+- **THEN** every player row and card uses its related official team metadata and the club filter lists exactly the selected season's teams
+
+#### Scenario: Historical-season clubs are displayed
+- **WHEN** the user switches to a retained historical season
+- **THEN** player-team relationships and club filter options are resolved from that historical season rather than reused from the current season
+
+#### Scenario: Player team metadata is inconsistent
+- **WHEN** a returned player does not have a related team in the selected-season catalogue
+- **THEN** the API returns a data-integrity error and the UI does not invent a club name from the numeric team ID

@@ -16,3 +16,10 @@
 - [x] 3.1 Add component/unit tests for page windows, result ranges, boundary states, sort transitions, and filter normalization.
 - [x] 3.2 Add Playwright coverage for per-column filters, ascending/descending sorting, page-size changes, and page navigation.
 - [x] 3.3 Run frontend verification, full Playwright regression, strict OpenSpec validation, and portfolio ownership/dependency validation.
+
+## 4. Authoritative player and club metadata correction
+
+- [x] 4.1 Add a season-scoped team read contract and return complete team metadata plus explicit player-team relationships from player research.
+- [x] 4.2 Remove frontend demo club mappings, hard-coded player totals, and fabricated fixture difficulty; render player and club fields from the API response.
+- [x] 4.3 Add backend, frontend, and Playwright regression coverage for current/historical team metadata and missing relationships.
+- [x] 4.4 Run all backend, frontend, Playwright, smoke, and strict OpenSpec portfolio checks and update PR #7.

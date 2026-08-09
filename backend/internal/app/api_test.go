@@ -54,15 +54,16 @@ func TestAPIResearchSquadAndRecommendationFlow(t *testing.T) {
 	}
 	var researchBody struct {
 		Data struct {
-			Items []Player `json:"items"`
-			Total int      `json:"total"`
+			Items []PlayerResearchItem `json:"items"`
+			Teams []Team               `json:"teams"`
+			Total int                  `json:"total"`
 		} `json:"data"`
 		Meta ResponseMeta `json:"meta"`
 	}
 	if err := json.NewDecoder(research.Body).Decode(&researchBody); err != nil {
 		t.Fatal(err)
 	}
-	if len(researchBody.Data.Items) != 3 || researchBody.Data.Total < 3 || researchBody.Meta.RequestID == "" || researchBody.Meta.Freshness.State == "" {
+	if len(researchBody.Data.Items) != 3 || len(researchBody.Data.Teams) != 5 || researchBody.Data.Items[0].Player.ID == 0 || researchBody.Data.Items[0].Player.TeamID != researchBody.Data.Items[0].Team.ID || researchBody.Data.Total < 3 || researchBody.Meta.RequestID == "" || researchBody.Meta.Freshness.State == "" {
 		t.Fatalf("unexpected research response: %#v", researchBody)
 	}
 
@@ -113,6 +114,18 @@ func TestAPIHandlesEmptyAndUnknownResearchResults(t *testing.T) {
 	handler.ServeHTTP(unknown, httptest.NewRequest(http.MethodGet, "/api/v1/players/9999", nil))
 	if unknown.Code != http.StatusNotFound {
 		t.Fatalf("unknown player status = %d", unknown.Code)
+	}
+}
+
+func TestAPIRejectsMissingPlayerTeamRelationship(t *testing.T) {
+	store := NewStore()
+	store.mu.Lock()
+	delete(store.teams, 1)
+	store.mu.Unlock()
+	recorder := httptest.NewRecorder()
+	NewAPI(store, NewFPLSource("http://127.0.0.1:1"), nil, nil).Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/players?search=Mason", nil))
+	if recorder.Code != http.StatusInternalServerError || !strings.Contains(recorder.Body.String(), `"code":"player_team_inconsistent"`) {
+		t.Fatalf("unexpected inconsistent team response: status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 }
 
