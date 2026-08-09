@@ -1,0 +1,49 @@
+name: reconcile
+
+on:
+  push:
+    tags:
+      - '[0-9]*.[0-9]*.[0-9]*'
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  open-pr:
+    name: open reconciliation PR
+    runs-on: ubuntu-latest
+    steps:
+      - name: Open reconciliation PR
+        uses: actions/github-script@v7
+        env:
+          CI_TAG: ${{ github.ref_name }}
+        with:
+          script: |
+            const tag = process.env.CI_TAG;
+            if (!/^\d+\.\d+\.\d+$/.test(tag)) {
+              core.info(`Skipping non-final release tag: ${tag}`);
+              return;
+            }
+            const [major, minor] = tag.split('.');
+            const releaseBranch = `release/${major}.${minor}`;
+            const { owner, repo } = context.repo;
+            const { data: openPulls } = await github.rest.pulls.list({
+              owner,
+              repo,
+              head: `${owner}:${releaseBranch}`,
+              base: 'main',
+              state: 'open',
+            });
+            if (openPulls.length > 0) {
+              core.info(`Reconciliation PR already exists for ${releaseBranch}`);
+              return;
+            }
+            await github.rest.pulls.create({
+              owner,
+              repo,
+              base: 'main',
+              head: releaseBranch,
+              title: `reconcile ${releaseBranch} into main`,
+              body: `Auto-opened after tag ${tag}. Review and merge with a merge commit.`,
+            });

@@ -82,8 +82,8 @@ Task branches, release branches, and tag-driven releases.
 ## Related docs
 * [Cheat sheet](cheatsheet.md)
 * [Git client settings](git-client-settings.md)
-* [Gitea settings](gitea-settings.md)
-* [Migration guide](migration-guide.md)
+* [GitHub settings](github-settings.md)
+* [GitHub migration guide](github-migration-guide.md)
 
 ## Goals
 * Keep **`main` buildable at all times**.

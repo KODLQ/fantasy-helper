@@ -100,6 +100,6 @@ The fix ends up on both branches at the same SHA.
 ## When stuck
 
 * Workflow rules: `README.md`
-* Repo settings: `gitea-settings.md`
+* Repo settings: `github-settings.md`
 * Local Git defaults: `git-client-settings.md`
 * Bringing an existing repo onto this workflow: `migration-guide.md`

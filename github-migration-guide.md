@@ -1,11 +1,11 @@
 # Migration Guide
 
 Use this guide to bring an existing repository onto this workflow. The end
-state is what `gitea-settings.md` describes.
+state is what `github-settings.md` describes.
 
 ## Prerequisites
 
-* Owner or admin rights on the repository in Gitea
+* Owner or admin rights on the repository in GitHub
 * At least one person identified to be a Release Maintainer (a second is
   encouraged but not required)
 * Awareness of any in-flight branches that do not yet match the new naming
@@ -23,18 +23,16 @@ the reviewers.
 
 Pick at least one person to be Release Maintainer for this repository. A
 second is encouraged where it is practical. Maintainers are assigned
-per-repository — list them by username in the `release/*` branch
-protection merge allowlist (`Allowlist Restricted Merge`) and in the
-version-tag protection allowlist.
+per-repository — add them as bypass actors for the `release/*` branch ruleset
+and the version-tag ruleset, where your GitHub plan supports bypass actors.
 
-### 3. Apply Gitea settings
+### 3. Apply GitHub settings
 
-Apply every setting in `gitea-settings.md`. The order of branch protection
-rules matters — earlier rules take priority. Order:
+Apply every setting in `github-settings.md`:
 
-1. `main`
-2. `release/*`
-3. catch-all (the long glob pattern)
+1. `main` branch protection
+2. `release/*` branch protection
+3. version-tag protection
 
 If you maintain multiple repos, apply the same settings to each.
 
@@ -49,10 +47,9 @@ The release workflow must build the commit referenced by the pushed tag and
 must not resolve "tip of `release/*`" at runtime. This is the safety
 property that protects against accidental branch-tip releases.
 
-List the exact CI check names (for example `build`, `test`, `lint`) in the
-**Enable Status Check** patterns on the `main` and `release/*` protection
-rules so PRs cannot merge without them. The names must match what your
-pipeline emits — a mismatch silently lets PRs merge with no checks.
+Require the exact CI check names (`build`, `test`, and `lint`) in the `main`
+and `release/*` branch rules so PRs cannot merge without them. The names must
+match what the workflow emits.
 
 ### 5. Migrate the trunk(s)
 
@@ -66,7 +63,7 @@ Nothing to do here.
 #### Case B: single trunk named `master`
 
 The repository has only `master`, used as the integration branch. Rename it
-to `main` in Gitea (Settings → Branches → rename default branch). Gitea's
+to `main` in GitHub (Settings → Branches (or Rules) → rename default branch). GitHub's
 rename will redirect open PRs to the new name.
 
 After the rename, every contributor must update their local checkout:
@@ -127,7 +124,7 @@ Steps:
    `development → main` and open a PR. This is a one-time recovery of
    history that was orphaned on `master`.
 
-5. **Rename `development → main`.** In Gitea, set `main` as the default and
+5. **Rename `development → main`.** In GitHub, set `main` as the default and
    rename `development`. Update CI and integrations.
 
 6. **Retire `master`.** Once `release/<major>.<minor>` is in place and any
@@ -173,7 +170,7 @@ git push origin :old-name task/new-name
 git push origin -u task/new-name
 ```
 
-If the branch has an open PR, update its source branch in Gitea after the
+If the branch has an open PR, update its source branch in GitHub after the
 push.
 
 For repositories with hundreds of stale branches (Xearch and Xync both have
@@ -205,6 +202,6 @@ fits on that one page.
 
 If you need to back out the workflow on a repository, the only state changes
 that are not trivially reversible are version tags (protected, immutable).
-Branch protection rules and merge-style settings can be reverted in Gitea at
+Branch protection rules and merge-style settings can be reverted in GitHub at
 any time. Renamed branches can be renamed back. Any tags pushed during the
 trial remain valid as historical records.
