@@ -6,6 +6,7 @@ ci:
     - fpl-research-assistant-foundation
     - technical-debt-foundation
     - fpl-public-data-warehouse
+    - fpl-multi-season-navigation
     - local-user-authentication
     - fpl-manager-league-sync
     - fpl-analysis-workbench
@@ -43,6 +44,12 @@ changes:
     dependsOn:
       - fpl-research-assistant-foundation
     reason: Durable public source, snapshot, migration, and common-response contracts.
+  fpl-multi-season-navigation:
+    owner: fpl-multi-season-navigation
+    authoritativeCapabilities: [multi-season-navigation]
+    dependsOn:
+      - fpl-public-data-warehouse
+    reason: Season discovery and selection require durable season-scoped warehouse identities and freshness metadata.
   local-user-authentication:
     owner: local-user-authentication
     authoritativeCapabilities: [local-user-authentication, user-workspace-ownership]
@@ -56,6 +63,7 @@ changes:
     dependsOn:
       - fpl-research-assistant-foundation
       - fpl-public-data-warehouse
+      - fpl-multi-season-navigation
       - local-user-authentication
     reason: Manager and league facts require public identities plus authenticated user ownership.
   fpl-analysis-workbench:
