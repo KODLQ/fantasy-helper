@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -33,6 +34,7 @@ type SourceObservation struct {
 type bootstrapResponse struct {
 	SeasonID     int                 `json:"season_id"`
 	SeasonName   string              `json:"season_name"`
+	TotalPlayers int                 `json:"total_players"`
 	Events       []sourceEvent       `json:"events"`
 	Phases       []sourcePhase       `json:"phases"`
 	Settings     json.RawMessage     `json:"game_settings"`
@@ -60,12 +62,13 @@ type SourceElementType = sourceElementType
 type BootstrapCatalog struct {
 	SeasonID     int
 	SeasonName   string
-	Events       []sourceEvent
-	Phases       []sourcePhase
+	TotalPlayers int
+	Events       []SourceEvent
+	Phases       []SourcePhase
 	Settings     json.RawMessage
-	ElementTypes []sourceElementType
-	Teams        []sourceTeam
-	Elements     []sourceElement
+	ElementTypes []SourceElementType
+	Teams        []SourceTeam
+	Elements     []SourceElement
 }
 type sourceEvent struct {
 	ID           int        `json:"id"`
@@ -73,13 +76,21 @@ type sourceEvent struct {
 	DeadlineTime *time.Time `json:"deadline_time"`
 	Finished     bool       `json:"finished"`
 	IsCurrent    bool       `json:"is_current"`
+	DataChecked  bool       `json:"data_checked"`
 	AverageScore float64    `json:"average_entry_score"`
 }
 type SourceEvent = sourceEvent
 type sourceTeam struct {
 	ID           int    `json:"id"`
+	Code         int    `json:"code"`
 	Name         string `json:"name"`
 	ShortName    string `json:"short_name"`
+	Played       int    `json:"played"`
+	Win          int    `json:"win"`
+	Draw         int    `json:"draw"`
+	Loss         int    `json:"loss"`
+	Points       int    `json:"points"`
+	Position     int    `json:"position"`
 	Strength     int    `json:"strength"`
 	StrengthHome int    `json:"strength_overall_home"`
 	StrengthAway int    `json:"strength_overall_away"`
@@ -90,85 +101,173 @@ type sourceTeam struct {
 }
 type SourceTeam = sourceTeam
 type sourceElement struct {
-	ID                int    `json:"id"`
-	FirstName         string `json:"first_name"`
-	SecondName        string `json:"second_name"`
-	WebName           string `json:"web_name"`
-	ElementType       int    `json:"element_type"`
-	Team              int    `json:"team"`
-	NowCost           int    `json:"now_cost"`
-	TotalPoints       int    `json:"total_points"`
-	Form              string `json:"form"`
-	Minutes           int    `json:"minutes"`
-	ValueForm         string `json:"value_form"`
-	Status            string `json:"status"`
-	News              string `json:"news"`
-	Chance            *int   `json:"chance_of_playing_next_round"`
-	Goals             int    `json:"goals_scored"`
-	Assists           int    `json:"assists"`
-	CleanSheets       int    `json:"clean_sheets"`
-	Bonus             int    `json:"bonus"`
-	Saves             int    `json:"saves"`
-	SelectedByPercent string `json:"selected_by_percent"`
-	YellowCards       int    `json:"yellow_cards"`
-	RedCards          int    `json:"red_cards"`
-	OwnGoals          int    `json:"own_goals"`
-	PenaltiesSaved    int    `json:"penalties_saved"`
-	PenaltiesMissed   int    `json:"penalties_missed"`
-	ExpectedGoals     string `json:"expected_goals"`
-	ExpectedAssists   string `json:"expected_assists"`
+	ID                   int    `json:"id"`
+	Code                 int    `json:"code"`
+	FirstName            string `json:"first_name"`
+	SecondName           string `json:"second_name"`
+	WebName              string `json:"web_name"`
+	ElementType          int    `json:"element_type"`
+	Team                 int    `json:"team"`
+	NowCost              int    `json:"now_cost"`
+	TotalPoints          int    `json:"total_points"`
+	Form                 string `json:"form"`
+	Minutes              int    `json:"minutes"`
+	ValueForm            string `json:"value_form"`
+	Status               string `json:"status"`
+	News                 string `json:"news"`
+	Chance               *int   `json:"chance_of_playing_next_round"`
+	Goals                int    `json:"goals_scored"`
+	Assists              int    `json:"assists"`
+	CleanSheets          int    `json:"clean_sheets"`
+	Bonus                int    `json:"bonus"`
+	Saves                int    `json:"saves"`
+	SelectedByPercent    string `json:"selected_by_percent"`
+	YellowCards          int    `json:"yellow_cards"`
+	RedCards             int    `json:"red_cards"`
+	OwnGoals             int    `json:"own_goals"`
+	PenaltiesSaved       int    `json:"penalties_saved"`
+	PenaltiesMissed      int    `json:"penalties_missed"`
+	ExpectedGoals        string `json:"expected_goals"`
+	ExpectedAssists      string `json:"expected_assists"`
+	ExpectedGoalsPer90   string `json:"expected_goal_per_90"`
+	ExpectedAssistsPer90 string `json:"expected_assists_per_90"`
+	Influence            string `json:"influence"`
+	Creativity           string `json:"creativity"`
+	Threat               string `json:"threat"`
+	ICTIndex             string `json:"ict_index"`
+	PointsPerGame        string `json:"points_per_game"`
+	EpThis               string `json:"ep_this"`
+	EpNext               string `json:"ep_next"`
+	ValueSeason          string `json:"value_season"`
+	CostChangeStart      int    `json:"cost_change_start"`
+	CostChangeEvent      int    `json:"cost_change_event"`
+	TransfersIn          int    `json:"transfers_in"`
+	TransfersOut         int    `json:"transfers_out"`
+	TransfersInEvent     int    `json:"transfers_in_event"`
+	TransfersOutEvent    int    `json:"transfers_out_event"`
+	Starts               int    `json:"starts"`
+	DreamteamCount       int    `json:"dreamteam_count"`
+	InDreamteam          bool   `json:"in_dreamteam"`
 }
 type SourceElement = sourceElement
 type sourceFixture struct {
-	ID       int        `json:"id"`
-	Event    int        `json:"event"`
-	Kickoff  *time.Time `json:"kickoff_time"`
-	Finished bool       `json:"finished"`
-	TeamH    int        `json:"team_h"`
-	TeamA    int        `json:"team_a"`
-	HDiff    int        `json:"team_h_difficulty"`
-	ADiff    int        `json:"team_a_difficulty"`
-	HScore   *int       `json:"team_h_score"`
-	AScore   *int       `json:"team_a_score"`
+	ID          int                 `json:"id"`
+	Code        int                 `json:"code"`
+	Event       *int                `json:"event"`
+	Kickoff     *time.Time          `json:"kickoff_time"`
+	Finished    bool                `json:"finished"`
+	Provisional bool                `json:"provisional_start_time"`
+	Started     *bool               `json:"started"`
+	TeamH       int                 `json:"team_h"`
+	TeamA       int                 `json:"team_a"`
+	HDiff       int                 `json:"team_h_difficulty"`
+	ADiff       int                 `json:"team_a_difficulty"`
+	HScore      *int                `json:"team_h_score"`
+	AScore      *int                `json:"team_a_score"`
+	Stats       []SourceFixtureStat `json:"stats"`
 }
 type SourceFixture = sourceFixture
+type sourceFixtureStat struct {
+	Identifier string            `json:"identifier"`
+	Home       []SourceStatValue `json:"h"`
+	Away       []SourceStatValue `json:"a"`
+}
+type SourceFixtureStat = sourceFixtureStat
+type sourceStatValue struct {
+	Element int `json:"element"`
+	Value   int `json:"value"`
+}
+type SourceStatValue = sourceStatValue
 type playerSummary struct {
 	History []sourceHistory `json:"history"`
 }
 type sourceHistory struct {
-	Element     int `json:"element"`
-	Round       int `json:"round"`
-	Minutes     int `json:"minutes"`
-	Points      int `json:"total_points"`
-	Goals       int `json:"goals_scored"`
-	Assists     int `json:"assists"`
-	CleanSheets int `json:"clean_sheets"`
-	Bonus       int `json:"bonus"`
-	Value       int `json:"value"`
+	Element      int        `json:"element"`
+	Round        int        `json:"round"`
+	Fixture      int        `json:"fixture"`
+	OpponentTeam int        `json:"opponent_team"`
+	IsHome       bool       `json:"was_home"`
+	KickoffTime  *time.Time `json:"kickoff_time"`
+	Minutes      int        `json:"minutes"`
+	Points       int        `json:"total_points"`
+	Goals        int        `json:"goals_scored"`
+	Assists      int        `json:"assists"`
+	CleanSheets  int        `json:"clean_sheets"`
+	Bonus        int        `json:"bonus"`
+	Value        int        `json:"value"`
 }
 type SourceHistory = sourceHistory
 
 type LivePlayerStats struct {
-	PlayerID        int    `json:"element"`
-	Minutes         int    `json:"minutes"`
-	Points          int    `json:"total_points"`
-	Goals           int    `json:"goals_scored"`
-	Assists         int    `json:"assists"`
-	CleanSheets     int    `json:"clean_sheets"`
-	Bonus           int    `json:"bonus"`
-	BPS             int    `json:"bps"`
-	Saves           int    `json:"saves"`
-	YellowCards     int    `json:"yellow_cards"`
-	RedCards        int    `json:"red_cards"`
-	OwnGoals        int    `json:"own_goals"`
-	PenaltiesSaved  int    `json:"penalties_saved"`
-	PenaltiesMissed int    `json:"penalties_missed"`
-	ExpectedGoals   string `json:"expected_goals"`
-	ExpectedAssists string `json:"expected_assists"`
+	PlayerID         int    `json:"element"`
+	Minutes          int    `json:"minutes"`
+	Points           int    `json:"total_points"`
+	Goals            int    `json:"goals_scored"`
+	Assists          int    `json:"assists"`
+	CleanSheets      int    `json:"clean_sheets"`
+	GoalsConceded    int    `json:"goals_conceded"`
+	Bonus            int    `json:"bonus"`
+	BPS              int    `json:"bps"`
+	Saves            int    `json:"saves"`
+	YellowCards      int    `json:"yellow_cards"`
+	RedCards         int    `json:"red_cards"`
+	OwnGoals         int    `json:"own_goals"`
+	PenaltiesSaved   int    `json:"penalties_saved"`
+	PenaltiesMissed  int    `json:"penalties_missed"`
+	TransfersBalance int    `json:"transfers_balance"`
+	Selected         int    `json:"selected"`
+	TransfersIn      int    `json:"transfers_in"`
+	TransfersOut     int    `json:"transfers_out"`
+	InDreamteam      bool   `json:"in_dreamteam"`
+	Influence        string `json:"influence"`
+	Creativity       string `json:"creativity"`
+	Threat           string `json:"threat"`
+	ICTIndex         string `json:"ict_index"`
+	ExpectedGoals    string `json:"expected_goals"`
+	ExpectedAssists  string `json:"expected_assists"`
 }
 type EventLive struct {
-	Elements []LivePlayerStats `json:"elements"`
+	Elements  []LivePlayerStats `json:"elements"`
+	Finalized *bool             `json:"finished,omitempty"`
 }
+
+// UnmarshalJSON accepts the official nested event-live shape and the flat
+// shape used by older source fixtures. Keeping this compatibility here makes
+// the canonical contract independent of a source fixture's representation.
+func (e *EventLive) UnmarshalJSON(data []byte) error {
+	var envelope struct {
+		Elements []json.RawMessage `json:"elements"`
+		Finished *bool             `json:"finished"`
+	}
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		return err
+	}
+	e.Elements = make([]LivePlayerStats, 0, len(envelope.Elements))
+	e.Finalized = envelope.Finished
+	for _, raw := range envelope.Elements {
+		var nested struct {
+			ID    int             `json:"id"`
+			Stats LivePlayerStats `json:"stats"`
+		}
+		if err := json.Unmarshal(raw, &nested); err != nil {
+			return err
+		}
+		if nested.Stats.PlayerID == 0 && nested.ID != 0 {
+			nested.Stats.PlayerID = nested.ID
+		}
+		if nested.Stats.PlayerID != 0 || nested.ID != 0 {
+			e.Elements = append(e.Elements, nested.Stats)
+			continue
+		}
+		var flat LivePlayerStats
+		if err := json.Unmarshal(raw, &flat); err != nil {
+			return err
+		}
+		e.Elements = append(e.Elements, flat)
+	}
+	return nil
+}
+
 type FutureFixture struct {
 	ID          int        `json:"id"`
 	Event       *int       `json:"event"`
@@ -179,9 +278,19 @@ type FutureFixture struct {
 	Difficulty  int        `json:"difficulty"`
 }
 type ElementSummary struct {
-	History     []sourceHistory          `json:"history"`
-	HistoryPast []map[string]interface{} `json:"history_past"`
-	Fixtures    []FutureFixture          `json:"fixtures"`
+	History     []SourceHistory     `json:"history"`
+	HistoryPast []PastSeasonHistory `json:"history_past"`
+	Fixtures    []FutureFixture     `json:"fixtures"`
+}
+type PastSeasonHistory struct {
+	SeasonName  string `json:"season_name"`
+	TotalPoints int    `json:"total_points"`
+	Minutes     int    `json:"minutes"`
+	Goals       int    `json:"goals_scored"`
+	Assists     int    `json:"assists"`
+	CleanSheets int    `json:"clean_sheets"`
+	Bonus       int    `json:"bonus"`
+	Value       int    `json:"value"`
 }
 
 func NewFPLSource(baseURL string) *FPLSource {
@@ -251,17 +360,112 @@ func (f *FPLSource) Bootstrap(ctx context.Context) (BootstrapCatalog, string, er
 	if err != nil {
 		return BootstrapCatalog{}, "", err
 	}
-	if payload.Events == nil || payload.Teams == nil || payload.Elements == nil {
-		return BootstrapCatalog{}, checksum, fmt.Errorf("bootstrap-static response is missing events, teams, or elements")
+	if payload.Events == nil || payload.Phases == nil || payload.Teams == nil || payload.Elements == nil || payload.ElementTypes == nil || len(payload.Settings) == 0 {
+		return BootstrapCatalog{}, checksum, f.sourceValidationError("/bootstrap-static/", checksum, fmt.Errorf("bootstrap-static response is missing required catalog fields"))
 	}
-	return BootstrapCatalog{SeasonID: payload.SeasonID, SeasonName: payload.SeasonName, Events: payload.Events, Phases: payload.Phases, Settings: payload.Settings, ElementTypes: payload.ElementTypes, Teams: payload.Teams, Elements: payload.Elements}, checksum, nil
+	if err := validateBootstrap(payload); err != nil {
+		return BootstrapCatalog{}, checksum, f.sourceValidationError("/bootstrap-static/", checksum, err)
+	}
+	return BootstrapCatalog{SeasonID: payload.SeasonID, SeasonName: payload.SeasonName, TotalPlayers: payload.TotalPlayers, Events: payload.Events, Phases: payload.Phases, Settings: payload.Settings, ElementTypes: payload.ElementTypes, Teams: payload.Teams, Elements: payload.Elements}, checksum, nil
+}
+
+func validateBootstrap(payload bootstrapResponse) error {
+	seen := map[int]struct{}{}
+	for _, phase := range payload.Phases {
+		if phase.ID <= 0 || strings.TrimSpace(phase.Name) == "" {
+			return fmt.Errorf("bootstrap phase has invalid source identity")
+		}
+	}
+	seen = map[int]struct{}{}
+	for _, elementType := range payload.ElementTypes {
+		if elementType.ID <= 0 || strings.TrimSpace(elementType.SingularName) == "" {
+			return fmt.Errorf("bootstrap element type has invalid source identity")
+		}
+		if _, ok := seen[elementType.ID]; ok {
+			return fmt.Errorf("bootstrap contains duplicate element type source ID %d", elementType.ID)
+		}
+		seen[elementType.ID] = struct{}{}
+	}
+	seen = map[int]struct{}{}
+	for _, event := range payload.Events {
+		if event.ID <= 0 || strings.TrimSpace(event.Name) == "" {
+			return fmt.Errorf("bootstrap event has invalid source identity")
+		}
+		if _, ok := seen[event.ID]; ok {
+			return fmt.Errorf("bootstrap contains duplicate event source ID %d", event.ID)
+		}
+		seen[event.ID] = struct{}{}
+	}
+	seen = map[int]struct{}{}
+	for _, team := range payload.Teams {
+		if team.ID <= 0 || strings.TrimSpace(team.Name) == "" {
+			return fmt.Errorf("bootstrap team has invalid source identity")
+		}
+		if _, ok := seen[team.ID]; ok {
+			return fmt.Errorf("bootstrap contains duplicate team source ID %d", team.ID)
+		}
+		seen[team.ID] = struct{}{}
+	}
+	seen = map[int]struct{}{}
+	for _, player := range payload.Elements {
+		if player.ID <= 0 || player.Team <= 0 || player.ElementType <= 0 {
+			return fmt.Errorf("bootstrap player has invalid source identity: %d", player.ID)
+		}
+		if _, ok := seen[player.ID]; ok {
+			return fmt.Errorf("bootstrap contains duplicate player source ID %d", player.ID)
+		}
+		seen[player.ID] = struct{}{}
+	}
+	return nil
+}
+
+type FixtureFeed struct {
+	Fixtures []SourceFixture
+}
+
+func (f *FPLSource) Fixtures(ctx context.Context, gameweek int) (FixtureFeed, string, error) {
+	path := "/fixtures/"
+	if gameweek > 0 {
+		path += "?" + url.Values{"event": []string{fmt.Sprintf("%d", gameweek)}}.Encode()
+	}
+	var payload []sourceFixture
+	checksum, err := f.get(ctx, path, &payload)
+	if err != nil {
+		return FixtureFeed{}, checksum, err
+	}
+	if payload == nil {
+		return FixtureFeed{}, checksum, f.sourceValidationError(path, checksum, fmt.Errorf("fixtures response must be an array"))
+	}
+	seen := map[int]struct{}{}
+	for _, fixture := range payload {
+		if fixture.ID <= 0 || fixture.TeamH <= 0 || fixture.TeamA <= 0 {
+			return FixtureFeed{}, checksum, f.sourceValidationError(path, checksum, fmt.Errorf("fixture has invalid source identity: %d", fixture.ID))
+		}
+		if _, ok := seen[fixture.ID]; ok {
+			return FixtureFeed{}, checksum, f.sourceValidationError(path, checksum, fmt.Errorf("fixtures contains duplicate source ID %d", fixture.ID))
+		}
+		seen[fixture.ID] = struct{}{}
+		for _, stats := range fixture.Stats {
+			if strings.TrimSpace(stats.Identifier) == "" {
+				return FixtureFeed{}, checksum, f.sourceValidationError(path, checksum, fmt.Errorf("fixture %d has a statistic without an identifier", fixture.ID))
+			}
+		}
+	}
+	return FixtureFeed{Fixtures: payload}, checksum, nil
 }
 
 func (f *FPLSource) EventLive(ctx context.Context, gameweek int) (EventLive, string, error) {
 	var payload EventLive
 	checksum, err := f.get(ctx, fmt.Sprintf("/event/%d/live/", gameweek), &payload)
 	if err == nil && payload.Elements == nil {
-		return EventLive{}, checksum, fmt.Errorf("event-live response is missing elements")
+		return EventLive{}, checksum, f.sourceValidationError(fmt.Sprintf("/event/%d/live/", gameweek), checksum, fmt.Errorf("event-live response is missing elements"))
+	}
+	if err == nil {
+		for _, player := range payload.Elements {
+			if player.PlayerID <= 0 {
+				return EventLive{}, checksum, f.sourceValidationError(fmt.Sprintf("/event/%d/live/", gameweek), checksum, fmt.Errorf("event-live element has invalid player source identity"))
+			}
+		}
 	}
 	return payload, checksum, err
 }
@@ -270,9 +474,28 @@ func (f *FPLSource) ElementSummary(ctx context.Context, playerID int) (ElementSu
 	var payload ElementSummary
 	checksum, err := f.get(ctx, fmt.Sprintf("/element-summary/%d/", playerID), &payload)
 	if err == nil && payload.History == nil && payload.HistoryPast == nil && payload.Fixtures == nil {
-		return ElementSummary{}, checksum, fmt.Errorf("element-summary response is missing history and fixtures")
+		return ElementSummary{}, checksum, f.sourceValidationError(fmt.Sprintf("/element-summary/%d/", playerID), checksum, fmt.Errorf("element-summary response is missing history and fixtures"))
+	}
+	if err == nil {
+		for _, row := range payload.History {
+			if row.Element != playerID || row.Round <= 0 || row.Fixture <= 0 || row.OpponentTeam <= 0 {
+				return ElementSummary{}, checksum, f.sourceValidationError(fmt.Sprintf("/element-summary/%d/", playerID), checksum, fmt.Errorf("element-summary history has invalid scope for player %d", playerID))
+			}
+		}
+		for _, fixture := range payload.Fixtures {
+			if fixture.ID <= 0 || fixture.TeamH <= 0 || fixture.TeamA <= 0 {
+				return ElementSummary{}, checksum, f.sourceValidationError(fmt.Sprintf("/element-summary/%d/", playerID), checksum, fmt.Errorf("element-summary fixture has invalid source identity"))
+			}
+		}
 	}
 	return payload, checksum, err
+}
+
+func (f *FPLSource) sourceValidationError(endpoint, checksum string, err error) error {
+	if f.OnObservation != nil {
+		f.OnObservation(SourceObservation{Endpoint: endpoint, FetchedAt: time.Now().UTC(), Checksum: checksum, ValidationState: "invalid", SchemaVersion: "fpl-public-v1", Diagnostic: err.Error()})
+	}
+	return err
 }
 
 func (f *FPLSource) Snapshot(ctx context.Context) (Season, []Gameweek, []Team, []Player, []Fixture, string, error) {
@@ -280,14 +503,11 @@ func (f *FPLSource) Snapshot(ctx context.Context) (Season, []Gameweek, []Team, [
 	if err != nil {
 		return Season{}, nil, nil, nil, nil, "", err
 	}
-	var fixtures []sourceFixture
-	fixtureChecksum, err := f.get(ctx, "/fixtures/", &fixtures)
+	fixtureFeed, fixtureChecksum, err := f.Fixtures(ctx, 0)
 	if err != nil {
 		return Season{}, nil, nil, nil, nil, checksum, err
 	}
-	if fixtures == nil {
-		return Season{}, nil, nil, nil, nil, checksum, fmt.Errorf("fixtures response must be an array")
-	}
+	fixtures := fixtureFeed.Fixtures
 	checksum = checksum + ":" + fixtureChecksum
 	seasonID, seasonName := f.SeasonID, f.SeasonName
 	if f.AllowDiscovery && seasonID == 0 && seasonName == "" {
@@ -311,7 +531,11 @@ func (f *FPLSource) Snapshot(ctx context.Context) (Season, []Gameweek, []Team, [
 	}
 	normalizedFixtures := make([]Fixture, 0, len(fixtures))
 	for _, fixture := range fixtures {
-		normalizedFixtures = append(normalizedFixtures, Fixture{ID: fixture.ID, Gameweek: fixture.Event, KickoffTime: fixture.Kickoff, Finished: fixture.Finished, HomeTeam: fixture.TeamH, AwayTeam: fixture.TeamA, HomeDifficulty: fixture.HDiff, AwayDifficulty: fixture.ADiff, HomeScore: fixture.HScore, AwayScore: fixture.AScore})
+		gameweek := 0
+		if fixture.Event != nil {
+			gameweek = *fixture.Event
+		}
+		normalizedFixtures = append(normalizedFixtures, Fixture{ID: fixture.ID, Gameweek: gameweek, KickoffTime: fixture.Kickoff, Finished: fixture.Finished, HomeTeam: fixture.TeamH, AwayTeam: fixture.TeamA, HomeDifficulty: fixture.HDiff, AwayDifficulty: fixture.ADiff, HomeScore: fixture.HScore, AwayScore: fixture.AScore})
 	}
 	return season, weeks, teams, players, normalizedFixtures, checksum, nil
 }
@@ -323,7 +547,7 @@ func (f *FPLSource) PlayerHistory(ctx context.Context, playerID int) ([]PlayerHi
 	}
 	history := make([]PlayerHistory, 0, len(summary.History))
 	for _, row := range summary.History {
-		history = append(history, PlayerHistory{Gameweek: row.Round, Minutes: row.Minutes, TotalPoints: row.Points, Goals: row.Goals, Assists: row.Assists, CleanSheets: row.CleanSheets, Bonus: row.Bonus, Value: float64(row.Value) / 10})
+		history = append(history, PlayerHistory{Gameweek: row.Round, FixtureID: row.Fixture, OpponentTeam: row.OpponentTeam, IsHome: row.IsHome, KickoffTime: row.KickoffTime, Minutes: row.Minutes, TotalPoints: row.Points, Goals: row.Goals, Assists: row.Assists, CleanSheets: row.CleanSheets, Bonus: row.Bonus, Value: float64(row.Value) / 10})
 	}
 	return history, checksum, nil
 }

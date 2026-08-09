@@ -12,7 +12,7 @@ func TestSourceNormalizesSnapshot(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/bootstrap-static/":
-			_, _ = w.Write([]byte(`{"season_id":2026,"season_name":"2026/27","events":[{"id":1,"name":"Gameweek 1","is_current":true}],"teams":[{"id":1,"name":"Example","short_name":"EXA"}],"elements":[{"id":10,"first_name":"A","second_name":"Player","web_name":"Player","element_type":3,"team":1,"now_cost":55,"total_points":42,"form":"6.2","minutes":500,"value_form":"11.1","status":"a"}]}`))
+			_, _ = w.Write([]byte(`{"season_id":2026,"season_name":"2026/27","events":[{"id":1,"name":"Gameweek 1","is_current":true}],"phases":[],"game_settings":{},"element_types":[{"id":3,"singular_name":"Midfielder","plural_name":"Midfielders"}],"teams":[{"id":1,"name":"Example","short_name":"EXA"}],"elements":[{"id":10,"first_name":"A","second_name":"Player","web_name":"Player","element_type":3,"team":1,"now_cost":55,"total_points":42,"form":"6.2","minutes":500,"value_form":"11.1","status":"a"}]}`))
 		case "/fixtures/":
 			_, _ = w.Write([]byte(`[{"id":99,"event":1,"team_h":1,"team_a":1,"team_h_difficulty":3,"team_a_difficulty":4,"finished":false}]`))
 		default:
@@ -35,7 +35,7 @@ func TestSourceNormalizesSnapshot(t *testing.T) {
 func TestSourceReportsRawObservations(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"events":[],"teams":[],"elements":[]}`))
+		_, _ = w.Write([]byte(`{"events":[],"phases":[],"game_settings":{},"element_types":[],"teams":[],"elements":[]}`))
 	}))
 	defer server.Close()
 	observations := []SourceObservation{}
@@ -81,7 +81,7 @@ func TestSourceRetriesRateLimitsAndServerErrors(t *testing.T) {
 					return
 				}
 				w.Header().Set("Content-Type", "application/json")
-				_, _ = w.Write([]byte(`{"season_id":2026,"season_name":"2026/27","events":[],"teams":[],"elements":[]}`))
+				_, _ = w.Write([]byte(`{"season_id":2026,"season_name":"2026/27","events":[],"phases":[],"game_settings":{},"element_types":[],"teams":[],"elements":[]}`))
 			}))
 			defer server.Close()
 			source := NewFPLSource(server.URL)
@@ -110,5 +110,37 @@ func TestSourceCapturesMalformedPayloadDiagnostic(t *testing.T) {
 	}
 	if observation.ValidationState != "invalid" || observation.Diagnostic == "" || observation.Checksum == "" {
 		t.Fatalf("missing malformed diagnostic: %#v", observation)
+	}
+}
+
+func TestSourceNormalizesFixtureLiveAndPlayerSummaryFeeds(t *testing.T) {
+	fixtureQuery := ""
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/fixtures/":
+			fixtureQuery = r.URL.RawQuery
+			_, _ = w.Write([]byte(`[{"id":99,"code":123,"event":4,"kickoff_time":"2026-09-12T15:00:00Z","finished":false,"provisional_start_time":false,"started":false,"team_h":1,"team_a":2,"team_h_difficulty":3,"team_a_difficulty":4,"stats":[{"identifier":"goals_scored","h":[{"element":10,"value":2}],"a":[]}]}]`))
+		case "/event/4/live/":
+			_, _ = w.Write([]byte(`{"finished":true,"elements":[{"id":10,"stats":{"minutes":90,"total_points":12,"goals_scored":2,"bps":88,"expected_goals":"1.20","expected_assists":"0.10"},"explain":[]}]}`))
+		case "/element-summary/10/":
+			_, _ = w.Write([]byte(`{"history":[{"element":10,"round":4,"fixture":99,"opponent_team":2,"was_home":true,"kickoff_time":"2026-09-12T15:00:00Z","minutes":90,"total_points":12,"goals_scored":2,"value":55}],"history_past":[{"season_name":"2025/26","total_points":120,"minutes":1800}],"fixtures":[{"id":100,"event":5,"kickoff_time":"2026-09-19T15:00:00Z","team_h":1,"team_a":3,"is_home":true,"difficulty":2}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	source := NewFPLSourceWithSeason(server.URL, 2026, "2026/27")
+	fixtures, _, err := source.Fixtures(context.Background(), 4)
+	if err != nil || fixtureQuery != "event=4" || len(fixtures.Fixtures) != 1 || len(fixtures.Fixtures[0].Stats) != 1 || fixtures.Fixtures[0].Stats[0].Home[0].Value != 2 {
+		t.Fatalf("unexpected fixture feed: %#v err=%v", fixtures, err)
+	}
+	live, _, err := source.EventLive(context.Background(), 4)
+	if err != nil || live.Finalized == nil || !*live.Finalized || len(live.Elements) != 1 || live.Elements[0].PlayerID != 10 || live.Elements[0].BPS != 88 {
+		t.Fatalf("unexpected live feed: %#v err=%v", live, err)
+	}
+	summary, _, err := source.ElementSummary(context.Background(), 10)
+	if err != nil || len(summary.History) != 1 || summary.History[0].Fixture != 99 || len(summary.HistoryPast) != 1 || len(summary.Fixtures) != 1 {
+		t.Fatalf("unexpected element summary: %#v err=%v", summary, err)
 	}
 }

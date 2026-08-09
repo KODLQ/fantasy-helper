@@ -13,10 +13,10 @@
 
 ## 2. Source adapter coverage
 
-- [ ] 2.1 Expand bootstrap normalization to retain phases, settings, element types, and all analysis-relevant player/team fields.
-- [ ] 2.2 Expand fixture normalization to retain full fixture metadata and fixture-level statistics.
-- [ ] 2.3 Add event-live normalization for all player gameweek statistics and finalization state.
-- [ ] 2.4 Expand element-summary normalization to include history, history-past, and upcoming fixtures.
+- [x] 2.1 Expand bootstrap normalization to retain phases, settings, element types, and all analysis-relevant player/team fields.
+- [x] 2.2 Expand fixture normalization to retain full fixture metadata and fixture-level statistics.
+- [x] 2.3 Add event-live normalization for all player gameweek statistics and finalization state.
+- [x] 2.4 Expand element-summary normalization to include history, history-past, and upcoming fixtures.
 - [x] 2.5 Store source payloads and checksums for every stage with bounded diagnostics.
 - [x] 2.6 Add adapter fixtures and schema-validation tests for complete, partial, malformed, 429, and 5xx responses.
 - [x] 2.7 Publish typed source contracts for bootstrap, fixtures, event-live, and element-summary; retain unknown fields and test numeric/null/type changes.

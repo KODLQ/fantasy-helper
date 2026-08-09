@@ -84,14 +84,18 @@ type Player struct {
 }
 
 type PlayerHistory struct {
-	Gameweek    int     `json:"gameweek"`
-	Minutes     int     `json:"minutes"`
-	TotalPoints int     `json:"totalPoints"`
-	Goals       int     `json:"goals"`
-	Assists     int     `json:"assists"`
-	CleanSheets int     `json:"cleanSheets"`
-	Bonus       int     `json:"bonus"`
-	Value       float64 `json:"value"`
+	Gameweek     int        `json:"gameweek"`
+	FixtureID    int        `json:"fixture,omitempty"`
+	OpponentTeam int        `json:"opponentTeam,omitempty"`
+	IsHome       bool       `json:"isHome,omitempty"`
+	KickoffTime  *time.Time `json:"kickoffTime,omitempty"`
+	Minutes      int        `json:"minutes"`
+	TotalPoints  int        `json:"totalPoints"`
+	Goals        int        `json:"goals"`
+	Assists      int        `json:"assists"`
+	CleanSheets  int        `json:"cleanSheets"`
+	Bonus        int        `json:"bonus"`
+	Value        float64    `json:"value"`
 }
 
 type Freshness struct {
