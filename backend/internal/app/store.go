@@ -171,28 +171,31 @@ func (s *Store) SearchPlayers(q PlayerQuery) ([]Player, int) {
 	}
 	sort.Slice(items, func(i, j int) bool {
 		left, right := items[i], items[j]
-		var less bool
+		var comparison int
 		switch q.Sort {
 		case "price":
-			less = left.Price < right.Price
+			comparison = compareOrdered(left.Price, right.Price)
 		case "form":
-			less = left.Form < right.Form
+			comparison = compareOrdered(left.Form, right.Form)
 		case "points":
-			less = left.TotalPoints < right.TotalPoints
+			comparison = compareOrdered(left.TotalPoints, right.TotalPoints)
 		case "minutes":
-			less = left.Minutes < right.Minutes
+			comparison = compareOrdered(left.Minutes, right.Minutes)
 		case "value":
-			less = left.Value < right.Value
+			comparison = compareOrdered(left.Value, right.Value)
 		default:
-			less = strings.ToLower(left.WebName) < strings.ToLower(right.WebName)
+			comparison = strings.Compare(strings.ToLower(left.WebName), strings.ToLower(right.WebName))
 		}
-		if q.Desc {
-			less = !less
+		if comparison != 0 {
+			if q.Desc {
+				return comparison > 0
+			}
+			return comparison < 0
 		}
-		if left.WebName == right.WebName {
-			return left.ID < right.ID
+		if nameComparison := strings.Compare(strings.ToLower(left.WebName), strings.ToLower(right.WebName)); nameComparison != 0 {
+			return nameComparison < 0
 		}
-		return less
+		return left.ID < right.ID
 	})
 	total := len(items)
 	page := q.Page
@@ -214,6 +217,16 @@ func (s *Store) SearchPlayers(q PlayerQuery) ([]Player, int) {
 	return items[start:end], total
 }
 
+func compareOrdered[T ~int | ~float64](left, right T) int {
+	if left < right {
+		return -1
+	}
+	if left > right {
+		return 1
+	}
+	return 0
+}
+
 func (s *Store) Player(id int) (Player, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -225,6 +238,16 @@ func (s *Store) Team(id int) (Team, bool) {
 	defer s.mu.RUnlock()
 	team, ok := s.teams[id]
 	return team, ok
+}
+func (s *Store) AllTeams() []Team {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	result := make([]Team, 0, len(s.teams))
+	for _, team := range s.teams {
+		result = append(result, team)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
+	return result
 }
 func (s *Store) History(id int) []PlayerHistory {
 	s.mu.RLock()

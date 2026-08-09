@@ -90,3 +90,134 @@
 .profile-close { position: absolute; z-index: 1; top: .65rem; right: .75rem; border: 0; background: transparent; color: var(--muted); font-size: 1.25rem; }
 .form-error { color: #ffb4a8; font-size: .8rem; }
 .protected-workspace { display: grid; gap: 1rem; align-items: start; padding: 2rem; border: 1px solid var(--line); border-radius: 16px; background: var(--panel); }
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.data-table-toolbar {
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  color: #718a84;
+  font-family: 'DM Mono', monospace;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: .6px;
+}
+
+.data-table-toolbar button:disabled {
+  cursor: default;
+  opacity: .45;
+}
+
+.data-table-scroll {
+  overflow-x: auto;
+}
+
+.data-table-sort {
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 7px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
+  white-space: nowrap;
+}
+
+.data-table-sort span,
+.data-table-sort.active {
+  color: var(--green);
+}
+
+.data-table-sort:focus-visible,
+.data-table-filters input:focus-visible,
+.data-table-filters select:focus-visible,
+.data-table-pagination button:focus-visible,
+.data-table-pagination select:focus-visible {
+  outline: 2px solid var(--green);
+  outline-offset: 2px;
+}
+
+.data-table-filters th {
+  padding: 7px 8px;
+  background: #102022;
+  vertical-align: top;
+}
+
+.data-table-filters input,
+.data-table-filters select {
+  width: 100%;
+  min-width: 74px;
+  height: 30px;
+  border: 1px solid #2a4140;
+  border-radius: 5px;
+  background: #0d1a1c;
+  color: var(--text);
+  padding: 5px 7px;
+  font-size: 10px;
+}
+
+.data-table-filters input::placeholder {
+  color: #627b76;
+}
+
+.range-filter {
+  min-width: 145px;
+  display: grid;
+  grid-template-columns: minmax(58px, 1fr) auto minmax(58px, 1fr);
+  align-items: center;
+  gap: 4px;
+  color: #627b76;
+}
+
+.data-table-pagination {
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.data-table-pagination > span {
+  margin-right: auto;
+}
+
+.data-table-pagination label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.data-table-pagination select {
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: #142527;
+  color: #a7bbb6;
+  padding: 5px 7px;
+  font-size: 10px;
+}
+
+.data-table-pagination nav {
+  display: flex;
+  align-items: center;
+}
+
+.data-table-pagination button:disabled {
+  cursor: default;
+  opacity: .55;
+}

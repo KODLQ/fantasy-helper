@@ -43,18 +43,17 @@ test.describe('application buttons', () => {
     await page.getByRole('button', { name: /Table/ }).click();
     await expect(page.getByTestId('player-table')).toBeVisible();
 
-    await page.getByRole('button', { name: /Filters/ }).click();
-    const filters = page.getByTestId('advanced-filters');
-    await expect(filters).toBeVisible();
-    await filters.getByLabel('Minimum form').fill('8');
-    await filters.getByRole('button', { name: 'Clear filters' }).click();
-    await expect(filters.getByLabel('Minimum form')).toHaveValue('');
-    await page.getByRole('button', { name: /Filters/ }).click();
-    await expect(filters).toBeHidden();
+    const table = page.getByTestId('player-table');
+    await table.getByLabel('Minimum form').fill('8');
+    await expect(table).toContainText('Filters applied');
+    await table.getByRole('button', { name: 'Clear filters' }).click();
+    await expect(table.getByLabel('Minimum form')).toHaveValue('');
 
-    await expect(page.getByRole('button', { name: 'Previous page' })).toBeDisabled();
-    await expect(page.getByRole('button', { name: 'Current page' })).toBeDisabled();
-    await expect(page.getByRole('button', { name: 'Next page' })).toBeDisabled();
+    await expect(table.getByRole('button', { name: 'Previous page' })).toBeDisabled();
+    await expect(table.getByRole('button', { name: 'Next page' })).toBeEnabled();
+    await table.getByRole('button', { name: 'Next page' }).click();
+    await expect(table.getByRole('button', { name: 'Page 2' })).toHaveAttribute('aria-current', 'page');
+    await expect(table.getByRole('button', { name: 'Previous page' })).toBeEnabled();
   });
 
   test('player, drawer, comparison, and empty-state buttons work', async ({ page }) => {

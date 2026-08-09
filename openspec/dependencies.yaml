@@ -7,6 +7,7 @@ ci:
     - technical-debt-foundation
     - fpl-public-data-warehouse
     - fpl-multi-season-navigation
+    - reusable-data-table
     - local-user-authentication
     - fpl-manager-league-sync
     - fpl-analysis-workbench
@@ -50,6 +51,13 @@ changes:
     dependsOn:
       - fpl-public-data-warehouse
     reason: Season discovery and selection require durable season-scoped warehouse identities and freshness metadata.
+  reusable-data-table:
+    owner: reusable-data-table
+    authoritativeCapabilities: [reusable-data-table]
+    dependsOn:
+      - fpl-research-assistant-foundation
+      - fpl-public-data-warehouse
+    reason: Shared controlled table behavior builds on the frontend foundation and paginated warehouse query contract.
   local-user-authentication:
     owner: local-user-authentication
     authoritativeCapabilities: [local-user-authentication, user-workspace-ownership]
