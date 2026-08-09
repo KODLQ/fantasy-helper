@@ -20,6 +20,22 @@ export type Player = {
   saves: number;
 };
 
+export type Team = {
+  id: number;
+  name: string;
+  shortName: string;
+  strength?: number;
+  strengthOverallHome?: number;
+  strengthOverallAway?: number;
+  strengthAttackHome?: number;
+  strengthAttackAway?: number;
+  strengthDefenceHome?: number;
+  strengthDefenceAway?: number;
+};
+
+export type PlayerResearchItem = { player: Player; team: Team };
+export type Fixture = { homeTeam: number; awayTeam: number; homeDifficulty: number; awayDifficulty: number };
+
 export type Freshness = { status: string; state?: string; lastSuccessfulSync?: string; warning?: string; warnings?: string[]; snapshotAt?: string };
 export type Gameweek = { id: number; name: string; finished: boolean; isCurrent: boolean };
 export type Season = {
@@ -175,9 +191,9 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 
 export const api = {
   seasons: (signal?: AbortSignal) => request<{ items: Season[] }>('/api/v1/seasons', { signal, operation: 'seasons', staleKey: 'seasons' }),
-  players: (params: URLSearchParams, signal?: AbortSignal) => { const seasonId = Number(params.get('seasonId')); return request<{ items: Player[]; total: number; page: number; pageSize: number; freshness: Freshness }>(`/api/v1/players?${params}`, { signal, operation: 'players', staleKey: `players:${params.toString()}`, expectedSeasonId: seasonId }); },
-  player: (seasonId: number, id: number, signal?: AbortSignal) => request<{ player: Player; team: { name: string; shortName: string }; history: { gameweek: number; totalPoints: number; minutes: number }[]; fixtures: { homeTeam: number; awayTeam: number; homeDifficulty: number; awayDifficulty: number }[]; freshness: Freshness }>(`/api/v1/players/${id}?seasonId=${seasonId}`, { signal, operation: 'player', staleKey: `player:${seasonId}:${id}`, expectedSeasonId: seasonId }),
-  compare: (seasonId: number, ids: number[], signal?: AbortSignal) => request<{ items: { player: Player; team: { shortName: string }; history: unknown[] }[]; freshness: Freshness }>(`/api/v1/players/compare?ids=${ids.join(',')}&seasonId=${seasonId}`, { signal, operation: 'compare', staleKey: `compare:${seasonId}`, expectedSeasonId: seasonId }),
+  players: (params: URLSearchParams, signal?: AbortSignal) => { const seasonId = Number(params.get('seasonId')); return request<{ items: PlayerResearchItem[]; teams: Team[]; total: number; page: number; pageSize: number; freshness: Freshness }>(`/api/v1/players?${params}`, { signal, operation: 'players', staleKey: `players:${params.toString()}`, expectedSeasonId: seasonId }); },
+  player: (seasonId: number, id: number, signal?: AbortSignal) => request<{ player: Player; team: Team; history: { gameweek: number; totalPoints: number; minutes: number }[]; fixtures: Fixture[]; freshness: Freshness }>(`/api/v1/players/${id}?seasonId=${seasonId}`, { signal, operation: 'player', staleKey: `player:${seasonId}:${id}`, expectedSeasonId: seasonId }),
+  compare: (seasonId: number, ids: number[], signal?: AbortSignal) => request<{ items: { player: Player; team: Team; history: unknown[]; fixtures: Fixture[] }[]; freshness: Freshness }>(`/api/v1/players/compare?ids=${ids.join(',')}&seasonId=${seasonId}`, { signal, operation: 'compare', staleKey: `compare:${seasonId}`, expectedSeasonId: seasonId }),
   squad: (seasonId: number, signal?: AbortSignal) => request<Squad>(`/api/v1/squad?seasonId=${seasonId}`, { signal, operation: 'squad', staleKey: `squad:${seasonId}`, expectedSeasonId: seasonId }),
   saveSquad: (seasonId: number, squad: Partial<Squad>) => request<Squad>(`/api/v1/squad?seasonId=${seasonId}`, { method: 'PUT', body: JSON.stringify(squad), operation: 'save-squad', expectedSeasonId: seasonId }),
   recommend: (seasonId: number, weights?: Record<string, number>, signal?: AbortSignal) => request<{ recommendation: Recommendation; freshness: Freshness }>(`/api/v1/recommendations?seasonId=${seasonId}`, { method: 'POST', body: JSON.stringify({ weights }), signal, operation: 'recommendation', staleKey: `recommendation:${seasonId}`, expectedSeasonId: seasonId }),
@@ -188,3 +204,4 @@ export const api = {
 
 export const positionName = (position: number) => ({ 1: 'GK', 2: 'DEF', 3: 'MID', 4: 'FWD' }[position] ?? '—');
 export const fullPositionName = (position: number) => ({ 1: 'Goalkeeper', 2: 'Defender', 3: 'Midfielder', 4: 'Forward' }[position] ?? 'Unknown');
+export const playerFixtureDifficulty = (teamId: number, fixture?: Fixture) => fixture ? (fixture.homeTeam === teamId ? fixture.homeDifficulty : fixture.awayTeam === teamId ? fixture.awayDifficulty : undefined) : undefined;

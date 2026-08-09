@@ -37,6 +37,7 @@ type DatasetSnapshotRepository interface {
 type ResearchReadRepository interface {
 	SearchPlayers(context.Context, PlayerQuery) ([]Player, int, error)
 	LoadPlayerDetail(context.Context, int, int) (PlayerDetail, bool, error)
+	ListTeamsForSeason(context.Context, int) ([]Team, error)
 }
 
 type SeasonCatalogueRepository interface {
@@ -725,7 +726,7 @@ func (r *PostgresRepository) SearchPlayers(ctx context.Context, q PlayerQuery) (
 		size = 100
 	}
 	args = append(args, size, (page-1)*size)
-	query := fmt.Sprintf(`SELECT p.source_id, p.first_name, p.second_name, p.web_name, p.position, t.source_id, p.price, p.total_points, p.form, p.minutes, p.value, p.status, p.news, p.chance_of_playing_next_round, p.goals_scored, p.assists, p.clean_sheets, p.bonus, p.saves, p.expected_minutes, p.recent_returns, COUNT(*) OVER() FROM players p JOIN teams t ON t.id=p.team_id JOIN seasons s ON s.id=p.season_id WHERE %s ORDER BY %s %s, p.source_id LIMIT $%d OFFSET $%d`, strings.Join(where, " AND "), sortColumn, direction, len(args)-1, len(args))
+	query := fmt.Sprintf(`SELECT p.source_id, p.first_name, p.second_name, p.web_name, p.position, t.source_id, p.price, p.total_points, p.form, p.minutes, p.value, p.status, p.news, p.chance_of_playing_next_round, p.goals_scored, p.assists, p.clean_sheets, p.bonus, p.saves, p.expected_minutes, p.recent_returns, COUNT(*) OVER() FROM players p JOIN teams t ON t.id=p.team_id JOIN seasons s ON s.id=p.season_id WHERE %s ORDER BY %s %s, LOWER(p.web_name), p.source_id LIMIT $%d OFFSET $%d`, strings.Join(where, " AND "), sortColumn, direction, len(args)-1, len(args))
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("search players: %w", err)
@@ -742,6 +743,23 @@ func (r *PostgresRepository) SearchPlayers(ctx context.Context, q PlayerQuery) (
 		items = append(items, item)
 	}
 	return items, total, rows.Err()
+}
+
+func (r *PostgresRepository) ListTeamsForSeason(ctx context.Context, seasonSourceID int) ([]Team, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT t.source_id, t.name, t.short_name, COALESCE(t.strength,0), COALESCE(t.strength_overall_home,0), COALESCE(t.strength_overall_away,0), COALESCE(t.strength_attack_home,0), COALESCE(t.strength_attack_away,0), COALESCE(t.strength_defence_home,0), COALESCE(t.strength_defence_away,0) FROM teams t JOIN seasons s ON s.id=t.season_id WHERE s.source_id=$1 ORDER BY t.source_id`, seasonSourceID)
+	if err != nil {
+		return nil, fmt.Errorf("list season teams: %w", err)
+	}
+	defer rows.Close()
+	items := []Team{}
+	for rows.Next() {
+		var item Team
+		if err := rows.Scan(&item.ID, &item.Name, &item.ShortName, &item.Strength, &item.StrengthHome, &item.StrengthAway, &item.AttackHome, &item.AttackAway, &item.DefenceHome, &item.DefenceAway); err != nil {
+			return nil, fmt.Errorf("scan season team: %w", err)
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
 }
 
 type rowScanner interface{ Scan(...interface{}) error }
@@ -761,15 +779,14 @@ func scanPlayerWithTotal(scanner rowScanner) (Player, int, error) {
 func (r *PostgresRepository) LoadPlayerDetail(ctx context.Context, seasonSourceID, sourcePlayerID int) (PlayerDetail, bool, error) {
 	detail := PlayerDetail{History: []PlayerHistory{}, Fixtures: []Fixture{}}
 	var chance sql.NullInt64
-	var teamID int
-	err := r.db.QueryRowContext(ctx, `SELECT p.source_id, p.first_name, p.second_name, p.web_name, p.position, t.source_id, p.price, p.total_points, p.form, p.minutes, p.value, p.status, p.news, p.chance_of_playing_next_round, p.goals_scored, p.assists, p.clean_sheets, p.bonus, p.saves, p.expected_minutes, p.recent_returns, t.name, t.short_name FROM players p JOIN teams t ON t.id=p.team_id JOIN seasons s ON s.id=p.season_id WHERE (s.source_id=$1 OR ($1=0 AND s.is_current)) AND p.source_id=$2 ORDER BY s.updated_at DESC LIMIT 1`, seasonSourceID, sourcePlayerID).Scan(&detail.Player.ID, &detail.Player.FirstName, &detail.Player.SecondName, &detail.Player.WebName, &detail.Player.Position, &teamID, &detail.Player.Price, &detail.Player.TotalPoints, &detail.Player.Form, &detail.Player.Minutes, &detail.Player.Value, &detail.Player.Status, &detail.Player.News, &chance, &detail.Player.GoalsScored, &detail.Player.Assists, &detail.Player.CleanSheets, &detail.Player.Bonus, &detail.Player.Saves, &detail.Player.ExpectedMinutes, &detail.Player.RecentReturns, &detail.Team.Name, &detail.Team.ShortName)
+	err := r.db.QueryRowContext(ctx, `SELECT p.source_id, p.first_name, p.second_name, p.web_name, p.position, t.source_id, p.price, p.total_points, p.form, p.minutes, p.value, p.status, p.news, p.chance_of_playing_next_round, p.goals_scored, p.assists, p.clean_sheets, p.bonus, p.saves, p.expected_minutes, p.recent_returns, t.name, t.short_name, COALESCE(t.strength,0), COALESCE(t.strength_overall_home,0), COALESCE(t.strength_overall_away,0), COALESCE(t.strength_attack_home,0), COALESCE(t.strength_attack_away,0), COALESCE(t.strength_defence_home,0), COALESCE(t.strength_defence_away,0) FROM players p JOIN teams t ON t.id=p.team_id JOIN seasons s ON s.id=p.season_id WHERE (s.source_id=$1 OR ($1=0 AND s.is_current)) AND p.source_id=$2 ORDER BY s.updated_at DESC LIMIT 1`, seasonSourceID, sourcePlayerID).Scan(&detail.Player.ID, &detail.Player.FirstName, &detail.Player.SecondName, &detail.Player.WebName, &detail.Player.Position, &detail.Team.ID, &detail.Player.Price, &detail.Player.TotalPoints, &detail.Player.Form, &detail.Player.Minutes, &detail.Player.Value, &detail.Player.Status, &detail.Player.News, &chance, &detail.Player.GoalsScored, &detail.Player.Assists, &detail.Player.CleanSheets, &detail.Player.Bonus, &detail.Player.Saves, &detail.Player.ExpectedMinutes, &detail.Player.RecentReturns, &detail.Team.Name, &detail.Team.ShortName, &detail.Team.Strength, &detail.Team.StrengthHome, &detail.Team.StrengthAway, &detail.Team.AttackHome, &detail.Team.AttackAway, &detail.Team.DefenceHome, &detail.Team.DefenceAway)
 	if err == sql.ErrNoRows {
 		return PlayerDetail{}, false, nil
 	}
 	if err != nil {
 		return PlayerDetail{}, false, fmt.Errorf("load player detail: %w", err)
 	}
-	detail.Player.TeamID = teamID
+	detail.Player.TeamID = detail.Team.ID
 	if chance.Valid {
 		value := int(chance.Int64)
 		detail.Player.ChanceOfPlaying = &value
@@ -791,7 +808,7 @@ func (r *PostgresRepository) LoadPlayerDetail(ctx context.Context, seasonSourceI
 		return PlayerDetail{}, false, err
 	}
 	historyRows.Close()
-	fixtureRows, err := r.db.QueryContext(ctx, `SELECT f.source_id, COALESCE(g.source_id,0), f.kickoff_time, f.finished, h.source_id, a.source_id, COALESCE(f.team_home_difficulty,0), COALESCE(f.team_away_difficulty,0), f.team_home_score, f.team_away_score FROM fixtures f JOIN teams h ON h.id=f.team_home_id JOIN teams a ON a.id=f.team_away_id JOIN seasons s ON s.id=f.season_id LEFT JOIN gameweeks g ON g.id=f.gameweek_id WHERE (s.source_id=$1 OR ($1=0 AND s.is_current)) AND f.finished=FALSE AND (h.source_id=$2 OR a.source_id=$2) ORDER BY f.kickoff_time NULLS LAST`, seasonSourceID, teamID)
+	fixtureRows, err := r.db.QueryContext(ctx, `SELECT f.source_id, COALESCE(g.source_id,0), f.kickoff_time, f.finished, h.source_id, a.source_id, COALESCE(f.team_home_difficulty,0), COALESCE(f.team_away_difficulty,0), f.team_home_score, f.team_away_score FROM fixtures f JOIN teams h ON h.id=f.team_home_id JOIN teams a ON a.id=f.team_away_id JOIN seasons s ON s.id=f.season_id LEFT JOIN gameweeks g ON g.id=f.gameweek_id WHERE (s.source_id=$1 OR ($1=0 AND s.is_current)) AND f.finished=FALSE AND (h.source_id=$2 OR a.source_id=$2) ORDER BY f.kickoff_time NULLS LAST`, seasonSourceID, detail.Team.ID)
 	if err != nil {
 		return PlayerDetail{}, false, err
 	}

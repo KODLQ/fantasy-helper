@@ -10,6 +10,8 @@ test.describe('player comparison', () => {
     await page.locator('nav').getByRole('button', { name: /Compare/ }).click();
     await expect(page.getByRole('heading', { name: 'Compare the shortlist' })).toBeVisible();
     await expect(page.getByTestId('comparison-card')).toHaveCount(4);
+    await expect(page.getByTestId('comparison-card').first()).toContainText('Fixture not loaded');
+    await expect(page.getByTestId('comparison-card').first()).not.toContainText('Difficulty 3/5');
   });
 
   test('prevents a fifth player from being compared', async ({ page }) => {
@@ -22,4 +24,3 @@ test.describe('player comparison', () => {
     await expect(page.getByTestId('comparison-card')).toHaveCount(4);
   });
 });
-

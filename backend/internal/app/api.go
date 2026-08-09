@@ -873,6 +873,7 @@ func (a *API) players(w http.ResponseWriter, r *http.Request) {
 	query := PlayerQuery{SeasonID: season.ID, Search: q.Get("search"), Position: parseInt(q.Get("position"), 0), TeamID: parseInt(q.Get("teamId"), 0), MinPrice: parseFloatParam(q.Get("minPrice")), MaxPrice: parseFloatParam(q.Get("maxPrice")), MinMinutes: parseInt(q.Get("minMinutes"), 0), MinForm: parseFloatParam(q.Get("minForm")), MinPoints: parseInt(q.Get("minPoints"), 0), MinValue: parseFloatParam(q.Get("minValue")), Status: q.Get("status"), Sort: q.Get("sort"), Desc: q.Get("direction") != "asc", Page: parseInt(q.Get("page"), 1), PageSize: parseInt(q.Get("pageSize"), 25)}
 	var results []Player
 	var total int
+	var teams []Team
 	if researchRepository, ok := a.Repository.(ResearchReadRepository); ok {
 		loaded, loadedTotal, err := researchRepository.SearchPlayers(r.Context(), query)
 		if err != nil {
@@ -880,12 +881,39 @@ func (a *API) players(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		results, total = loaded, loadedTotal
+		teams, err = researchRepository.ListTeamsForSeason(r.Context(), season.ID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "research_unavailable", "Player research is temporarily unavailable.", nil)
+			return
+		}
 	} else {
 		results, total = a.Store.SearchPlayers(query)
+		teams = a.Store.AllTeams()
+	}
+	items, err := relatePlayersToTeams(results, teams)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "player_team_inconsistent", "Player and club data are temporarily inconsistent.", nil)
+		return
 	}
 	scope := Scope{SeasonID: season.ID, Dataset: "public-fpl"}
 	freshness := a.requestFreshness(r.Context(), scope)
-	writeEnvelopeWithWarnings(w, http.StatusOK, w.Header().Get("X-Request-ID"), scope, freshness, warnings, map[string]interface{}{"items": results, "total": total, "page": query.Page, "pageSize": query.PageSize, "freshness": freshness})
+	writeEnvelopeWithWarnings(w, http.StatusOK, w.Header().Get("X-Request-ID"), scope, freshness, warnings, map[string]interface{}{"items": items, "teams": teams, "total": total, "page": query.Page, "pageSize": query.PageSize, "freshness": freshness})
+}
+
+func relatePlayersToTeams(players []Player, teams []Team) ([]PlayerResearchItem, error) {
+	byID := make(map[int]Team, len(teams))
+	for _, team := range teams {
+		byID[team.ID] = team
+	}
+	items := make([]PlayerResearchItem, 0, len(players))
+	for _, player := range players {
+		team, ok := byID[player.TeamID]
+		if !ok {
+			return nil, fmt.Errorf("player %d references missing team %d", player.ID, player.TeamID)
+		}
+		items = append(items, PlayerResearchItem{Player: player, Team: team})
+	}
+	return items, nil
 }
 func (a *API) playerDetail(w http.ResponseWriter, r *http.Request, seasonID, id int, warnings []string) {
 	scope := Scope{SeasonID: seasonID, Dataset: "public-fpl"}
@@ -908,7 +936,11 @@ func (a *API) playerDetail(w http.ResponseWriter, r *http.Request, seasonID, id 
 		writeError(w, http.StatusNotFound, "player_not_found", "Player not found in the active season.", nil)
 		return
 	}
-	team, _ := a.Store.Team(player.TeamID)
+	team, found := a.Store.Team(player.TeamID)
+	if !found {
+		writeError(w, http.StatusInternalServerError, "player_team_inconsistent", "Player and club data are temporarily inconsistent.", nil)
+		return
+	}
 	freshness := a.Store.Freshness()
 	writeEnvelopeWithWarnings(w, http.StatusOK, w.Header().Get("X-Request-ID"), scope, freshness, warnings, map[string]interface{}{"player": player, "team": team, "history": a.Store.History(id), "fixtures": a.Store.UpcomingFixtures(player.TeamID), "freshness": freshness})
 }
@@ -936,7 +968,7 @@ func (a *API) compare(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusNotFound, "player_not_found", "One of the selected players was not found.", nil)
 				return
 			}
-			items = append(items, map[string]interface{}{"player": detail.Player, "team": detail.Team, "history": detail.History})
+			items = append(items, map[string]interface{}{"player": detail.Player, "team": detail.Team, "history": detail.History, "fixtures": detail.Fixtures})
 			continue
 		}
 		player, found := a.Store.Player(id)
@@ -944,13 +976,17 @@ func (a *API) compare(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "player_not_found", "One of the selected players was not found.", nil)
 			return
 		}
-		items = append(items, map[string]interface{}{"player": player, "team": mustTeam(a.Store.Team(player.TeamID)), "history": a.Store.History(id)})
+		team, found := a.Store.Team(player.TeamID)
+		if !found {
+			writeError(w, http.StatusInternalServerError, "player_team_inconsistent", "Player and club data are temporarily inconsistent.", nil)
+			return
+		}
+		items = append(items, map[string]interface{}{"player": player, "team": team, "history": a.Store.History(id), "fixtures": a.Store.UpcomingFixtures(player.TeamID)})
 	}
 	scope := Scope{SeasonID: season.ID, Dataset: "public-fpl"}
 	freshness := a.requestFreshness(r.Context(), scope)
 	writeEnvelopeWithWarnings(w, http.StatusOK, w.Header().Get("X-Request-ID"), scope, freshness, warnings, map[string]interface{}{"items": items, "freshness": freshness})
 }
-func mustTeam(team Team, ok bool) Team { return team }
 func (a *API) squad(w http.ResponseWriter, r *http.Request) {
 	season, warnings, err := a.resolveSeason(r.Context(), parseInt(r.URL.Query().Get("seasonId"), 0))
 	if err != nil {

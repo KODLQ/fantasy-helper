@@ -141,6 +141,10 @@ func TestPostgresRepositoryPersistence(t *testing.T) {
 	if err != nil || len(players) != 3 || total != len(snapshot.Players) {
 		t.Fatalf("unexpected PostgreSQL research result: count=%d total=%d err=%v", len(players), total, err)
 	}
+	teams, err := repository.ListTeamsForSeason(ctx, snapshot.Season.ID)
+	if err != nil || len(teams) != len(snapshot.Teams) || teams[0].ID != snapshot.Teams[0].ID || teams[0].Name != snapshot.Teams[0].Name {
+		t.Fatalf("unexpected PostgreSQL team catalogue: teams=%#v err=%v", teams, err)
+	}
 	detail, found, err := repository.LoadPlayerDetail(ctx, snapshot.Season.ID, players[0].ID)
 	if err != nil || !found || detail.Player.ID != players[0].ID || detail.Team.ShortName == "" {
 		t.Fatalf("unexpected PostgreSQL player detail: %#v found=%v err=%v", detail, found, err)
