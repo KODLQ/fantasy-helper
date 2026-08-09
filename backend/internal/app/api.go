@@ -123,10 +123,42 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/sync", a.sync)
 	mux.HandleFunc("/api/v1/players", a.players)
 	mux.HandleFunc("/api/v1/players/", a.players)
+	mux.HandleFunc("/api/v1/analysis/players/", a.playerAnalysis)
 	mux.HandleFunc("/api/v1/players/compare", a.compare)
 	mux.HandleFunc("/api/v1/squad", a.squad)
 	mux.HandleFunc("/api/v1/recommendations", a.recommendations)
 	return withCORS(withRequestID(mux))
+}
+
+func (a *API) playerAnalysis(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Use GET for historical player analysis.", nil)
+		return
+	}
+	repository, ok := a.Repository.(HistoricalResearchRepository)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "analysis_unavailable", "Historical analysis requires the PostgreSQL warehouse.", nil)
+		return
+	}
+	playerID := parseInt(strings.TrimPrefix(r.URL.Path, "/api/v1/analysis/players/"), 0)
+	query := r.URL.Query()
+	scope := Scope{SeasonID: parseInt(query.Get("seasonId"), 0), Gameweek: parseInt(query.Get("gameweek"), 0), Dataset: "public-fpl"}
+	snapshotID := query.Get("snapshotId")
+	if playerID <= 0 || scope.SeasonID <= 0 || (scope.Gameweek <= 0 && snapshotID == "") {
+		writeError(w, http.StatusBadRequest, "historical_scope_required", "Player, seasonId, and gameweek or snapshotId are required.", nil)
+		return
+	}
+	item, found, err := repository.LoadPlayerAnalysis(r.Context(), scope.SeasonID, scope.Gameweek, snapshotID, playerID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "analysis_unavailable", "Historical player analysis is temporarily unavailable.", nil)
+		return
+	}
+	if !found {
+		writeError(w, http.StatusNotFound, "analysis_not_found", "No player analysis exists for the requested scope.", nil)
+		return
+	}
+	freshness := a.requestFreshness(r.Context(), scope)
+	writeEnvelope(w, http.StatusOK, w.Header().Get("X-Request-ID"), scope, freshness, item)
 }
 func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

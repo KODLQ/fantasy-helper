@@ -39,6 +39,10 @@ type ResearchReadRepository interface {
 	LoadPlayerDetail(context.Context, int) (PlayerDetail, bool, error)
 }
 
+type HistoricalResearchRepository interface {
+	LoadPlayerAnalysis(context.Context, int, int, string, int) (PlayerAnalysis, bool, error)
+}
+
 type DatasetFreshnessRepository interface {
 	CurrentDatasetFreshness(context.Context, Scope) (Freshness, error)
 }
@@ -237,7 +241,7 @@ func (r *PostgresRepository) UpsertLiveGameweek(ctx context.Context, snapshotID 
 }
 
 func (r *PostgresRepository) LiveGameweekFactsUnchanged(ctx context.Context, seasonSourceID, gameweekSourceID int, incoming []LivePlayerStats) (bool, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT f.raw FROM player_gameweek_facts f JOIN dataset_snapshots d ON d.id=f.snapshot_id JOIN seasons s ON s.id=d.season_id JOIN gameweeks g ON g.id=f.gameweek_id WHERE s.source_id=$1 AND g.source_id=$2 AND d.id=(SELECT d2.id FROM dataset_snapshots d2 JOIN seasons s2 ON s2.id=d2.season_id JOIN gameweeks g2 ON g2.id=d2.gameweek_id WHERE s2.source_id=$1 AND g2.source_id=$2 ORDER BY d2.normalized_at DESC, d2.id DESC LIMIT 1) ORDER BY f.player_id`, seasonSourceID, gameweekSourceID)
+	rows, err := r.db.QueryContext(ctx, `SELECT f.raw FROM player_gameweek_facts f JOIN dataset_snapshots d ON d.id=f.snapshot_id JOIN seasons s ON s.id=d.season_id JOIN gameweeks g ON g.id=f.gameweek_id WHERE s.source_id=$1 AND g.source_id=$2 AND d.id=(SELECT d2.id FROM dataset_snapshots d2 JOIN seasons s2 ON s2.id=d2.season_id JOIN gameweeks g2 ON g2.id=d2.gameweek_id JOIN player_gameweek_facts f2 ON f2.snapshot_id=d2.id WHERE s2.source_id=$1 AND g2.source_id=$2 ORDER BY d2.normalized_at DESC, d2.id DESC LIMIT 1) ORDER BY f.player_id`, seasonSourceID, gameweekSourceID)
 	if err != nil {
 		return false, fmt.Errorf("load prior live gameweek facts: %w", err)
 	}
@@ -685,6 +689,38 @@ func (r *PostgresRepository) LoadPlayerDetail(ctx context.Context, sourcePlayerI
 	fixtureRows.Close()
 	detail.Freshness = Freshness{Status: "fresh", State: "actual", Dataset: "public-fpl"}
 	return detail, true, nil
+}
+
+func (r *PostgresRepository) LoadPlayerAnalysis(ctx context.Context, seasonSourceID, gameweekSourceID int, snapshotID string, playerSourceID int) (PlayerAnalysis, bool, error) {
+	if seasonSourceID <= 0 || playerSourceID <= 0 || (gameweekSourceID <= 0 && snapshotID == "") {
+		return PlayerAnalysis{}, false, fmt.Errorf("historical player analysis requires season, player, and gameweek or snapshot scope")
+	}
+	var item PlayerAnalysis
+	var chance sql.NullInt64
+	err := r.db.QueryRowContext(ctx, `WITH target AS (SELECT d.id, d.season_id, d.gameweek_id, d.normalized_at FROM dataset_snapshots d JOIN seasons s ON s.id=d.season_id LEFT JOIN gameweeks g ON g.id=d.gameweek_id WHERE s.source_id=$1 AND (($3<>'' AND d.id::text=$3) OR ($3='' AND $2>0 AND g.source_id=$2)) ORDER BY d.normalized_at DESC, d.id DESC LIMIT 1), current_value AS (SELECT ps.*, t.id AS target_id FROM target t JOIN player_snapshots ps ON ps.snapshot_id=t.id JOIN players p ON p.id=ps.player_id WHERE p.source_id=$4) SELECT t.id::text, s.source_id, COALESCE(g.source_id,0), p.source_id, p.web_name, team.source_id, team.name, cv.price, cv.price-COALESCE(previous.price,cv.price), COALESCE(cv.selected_by_percent,0), COALESCE(cv.selected_by_percent,0)-COALESCE(previous.selected_by_percent,cv.selected_by_percent,0), COALESCE(cv.form,0), COALESCE((SELECT AVG(h.total_points) FROM (SELECT h.total_points FROM player_gameweek_history h JOIN gameweeks hg ON hg.id=h.gameweek_id WHERE h.player_id=p.id AND ($2=0 OR hg.source_id<=$2) ORDER BY hg.source_id DESC LIMIT 5) h),0), COALESCE(cv.total_points,0), COALESCE(cv.minutes,0), COALESCE(cv.value,0), COALESCE(cv.value,0)-COALESCE(previous.value,cv.value,0), cv.status, cv.chance_of_playing_next_round, cv.observed_at FROM target t JOIN seasons s ON s.id=t.season_id LEFT JOIN gameweeks g ON g.id=t.gameweek_id JOIN current_value cv ON cv.target_id=t.id JOIN players p ON p.id=cv.player_id JOIN teams team ON team.id=cv.team_id LEFT JOIN LATERAL (SELECT old.price, old.value, old.selected_by_percent FROM player_snapshots old JOIN dataset_snapshots od ON od.id=old.snapshot_id WHERE old.player_id=p.id AND od.normalized_at<t.normalized_at ORDER BY od.normalized_at DESC LIMIT 1) previous ON TRUE`, seasonSourceID, gameweekSourceID, snapshotID, playerSourceID).Scan(&item.SnapshotID, &item.SeasonID, &item.Gameweek, &item.PlayerID, &item.WebName, &item.TeamID, &item.TeamName, &item.Price, &item.PriceChange, &item.Ownership, &item.OwnershipChange, &item.Form, &item.RollingPoints, &item.TotalPoints, &item.Minutes, &item.Value, &item.ValueChange, &item.Status, &chance, &item.ObservedAt)
+	if err == sql.ErrNoRows {
+		return PlayerAnalysis{}, false, nil
+	}
+	if err != nil {
+		return PlayerAnalysis{}, false, fmt.Errorf("load scoped player analysis: %w", err)
+	}
+	if chance.Valid {
+		value := int(chance.Int64)
+		item.ChanceOfPlaying = &value
+	}
+	rows, err := r.db.QueryContext(ctx, `SELECT f.source_id, COALESCE(g.source_id,0), f.kickoff_time, f.finished, h.source_id, a.source_id, COALESCE(f.team_home_difficulty,0), COALESCE(f.team_away_difficulty,0), f.team_home_score, f.team_away_score FROM fixtures f JOIN seasons s ON s.id=f.season_id JOIN teams h ON h.id=f.team_home_id JOIN teams a ON a.id=f.team_away_id LEFT JOIN gameweeks g ON g.id=f.gameweek_id WHERE s.source_id=$1 AND ($2=0 OR g.source_id>=$2) AND (h.source_id=$3 OR a.source_id=$3) ORDER BY g.source_id, f.kickoff_time NULLS LAST LIMIT 10`, seasonSourceID, item.Gameweek, item.TeamID)
+	if err != nil {
+		return PlayerAnalysis{}, false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var fixture Fixture
+		if err := rows.Scan(&fixture.ID, &fixture.Gameweek, &fixture.KickoffTime, &fixture.Finished, &fixture.HomeTeam, &fixture.AwayTeam, &fixture.HomeDifficulty, &fixture.AwayDifficulty, &fixture.HomeScore, &fixture.AwayScore); err != nil {
+			return PlayerAnalysis{}, false, err
+		}
+		item.UpcomingFixtures = append(item.UpcomingFixtures, fixture)
+	}
+	return item, true, rows.Err()
 }
 
 func (r *PostgresRepository) currentSeasonID(ctx context.Context) (int64, error) {

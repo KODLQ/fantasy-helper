@@ -71,9 +71,26 @@ func TestPostgresRepositoryPersistence(t *testing.T) {
 	if err != nil || freshness.State != "actual" || len(freshness.SnapshotIDs) != 1 || freshness.NormalizerVersion != "fpl-public-v1" {
 		t.Fatalf("unexpected dataset freshness: %#v err=%v", freshness, err)
 	}
+	for _, state := range []string{"partial", "stale"} {
+		dataset := "state-test-" + state
+		if err := repository.CreateDatasetSnapshot(ctx, DatasetSnapshot{ID: newSnapshotID(), Dataset: dataset, State: state, SeasonID: snapshot.Season.ID, Gameweek: 1, NormalizedAt: time.Now().UTC(), NormalizerVersion: "fpl-public-v1"}); err != nil {
+			t.Fatal(err)
+		}
+		stateFreshness, err := repository.CurrentDatasetFreshness(ctx, Scope{SeasonID: snapshot.Season.ID, Gameweek: 1, Dataset: dataset})
+		if err != nil || stateFreshness.State != state || stateFreshness.Status != state {
+			t.Fatalf("unexpected %s freshness: %#v err=%v", state, stateFreshness, err)
+		}
+	}
+	unavailableFreshness, err := repository.CurrentDatasetFreshness(ctx, Scope{SeasonID: snapshot.Season.ID, Dataset: "missing-state-test"})
+	if err != nil || unavailableFreshness.State != "unavailable" || unavailableFreshness.Status != "unavailable" {
+		t.Fatalf("unexpected unavailable freshness: %#v err=%v", unavailableFreshness, err)
+	}
 	fixture := snapshot.Fixtures[0]
 	player := snapshot.Players[0]
 	observedAt := time.Now().UTC().Truncate(time.Microsecond)
+	if err := repository.UpsertPlayerSnapshots(ctx, datasetSnapshotID, snapshot.Season.ID, observedAt, []Player{player}); err != nil {
+		t.Fatal(err)
+	}
 	if err := repository.UpsertFixtureStats(ctx, snapshot.Season.ID, observedAt, []SourceFixture{{ID: fixture.ID, Stats: []SourceFixtureStat{{Identifier: "goals_scored", Home: []SourceStatValue{{Element: player.ID, Value: 1}}}}}}); err != nil {
 		t.Fatal(err)
 	}
@@ -101,6 +118,24 @@ func TestPostgresRepositoryPersistence(t *testing.T) {
 	}
 	if fixtureStatCount != 1 || liveFactCount != 1 {
 		t.Fatalf("warehouse facts not persisted: fixture=%d live=%d", fixtureStatCount, liveFactCount)
+	}
+	secondSnapshotID := newSnapshotID()
+	if err := repository.CreateDatasetSnapshot(ctx, DatasetSnapshot{ID: secondSnapshotID, Dataset: "player-gameweek", State: "actual", SeasonID: snapshot.Season.ID, Gameweek: 1, SourceFetchedAt: observedAt.Add(time.Minute), NormalizedAt: observedAt.Add(time.Minute), NormalizerVersion: "fpl-public-v1"}); err != nil {
+		t.Fatal(err)
+	}
+	changedPlayer := player
+	changedPlayer.Price++
+	changedPlayer.Value += 2
+	if err := repository.UpsertPlayerSnapshots(ctx, secondSnapshotID, snapshot.Season.ID, observedAt.Add(time.Minute), []Player{changedPlayer}); err != nil {
+		t.Fatal(err)
+	}
+	firstAnalysis, found, err := repository.LoadPlayerAnalysis(ctx, snapshot.Season.ID, 0, datasetSnapshotID, player.ID)
+	if err != nil || !found || firstAnalysis.Price != player.Price || firstAnalysis.PriceChange != 0 {
+		t.Fatalf("unexpected first scoped analysis: %#v found=%v err=%v", firstAnalysis, found, err)
+	}
+	secondAnalysis, found, err := repository.LoadPlayerAnalysis(ctx, snapshot.Season.ID, 0, secondSnapshotID, player.ID)
+	if err != nil || !found || secondAnalysis.Price != changedPlayer.Price || secondAnalysis.PriceChange != 1 || secondAnalysis.ValueChange != 2 {
+		t.Fatalf("historical snapshot isolation failed: %#v found=%v err=%v", secondAnalysis, found, err)
 	}
 	players, total, err := repository.SearchPlayers(ctx, PlayerQuery{Sort: "form", Desc: true, Page: 1, PageSize: 3})
 	if err != nil || len(players) != 3 || total != len(snapshot.Players) {

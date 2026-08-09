@@ -40,11 +40,11 @@
 
 - [x] 4.1 Replace production in-memory reads with PostgreSQL repositories while preserving existing API response contracts.
 - [x] 4.2 Add dataset-level freshness and partial-sync metadata to research and recommendation responses.
-- [ ] 4.3 Add read models for rolling form, price/value changes, availability, fixture context, and historical gameweek analysis.
+- [x] 4.3 Add read models for rolling form, price/value changes, availability, fixture context, and historical gameweek analysis.
 - [x] 4.4 Add database-backed sync status, stage progress, diagnostics summary, and retry endpoints.
 - [ ] 4.5 Keep the in-memory store as a fixture-backed unit-test implementation only.
 - [x] 4.6 Add `/api/v1/data/snapshots`, scoped sync request, retry-run, and common freshness response contracts.
-- [ ] 4.7 Add repository query methods that require explicit season/gameweek/snapshot scope for historical reads.
+- [x] 4.7 Add repository query methods that require explicit season/gameweek/snapshot scope for historical reads.
 
 ## 5. Verification and rollout
 
@@ -53,6 +53,6 @@
 - [x] 5.3 Compare player counts, fixture counts, gameweek facts, and selected metrics before/after the new pipeline.
 - [x] 5.4 Update README/configuration documentation for PostgreSQL-backed sync, retention, scheduling, and troubleshooting.
 - [ ] 5.5 Run unit, integration, frontend, and browser smoke tests against the database-backed stack.
-- [ ] 5.6 Add tests proving historical/current snapshot isolation and actual/partial/stale/unavailable state labels.
+- [x] 5.6 Add tests proving historical/current snapshot isolation and actual/partial/stale/unavailable state labels.
 - [ ] 5.7 Add retention cleanup tests that preserve canonical facts and active reproducibility references.
 - [ ] 5.8 Add Playwright coverage for manual sync, progress, partial/failure states, stale/unavailable freshness, retry controls, and response errors.

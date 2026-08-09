@@ -113,4 +113,14 @@ func TestFullSyncPersistsSourceParityThroughPostgresQueue(t *testing.T) {
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"webName":"One"`) || strings.Contains(response.Body.String(), `"webName":"Fox"`) {
 		t.Fatalf("production player read did not use PostgreSQL: status=%d body=%s", response.Code, response.Body.String())
 	}
+	analysisResponse := httptest.NewRecorder()
+	readAPI.Handler().ServeHTTP(analysisResponse, httptest.NewRequest(http.MethodGet, "/api/v1/analysis/players/10?seasonId=2026&gameweek=1", nil))
+	if analysisResponse.Code != http.StatusOK || !strings.Contains(analysisResponse.Body.String(), `"rollingPoints":9`) || !strings.Contains(analysisResponse.Body.String(), `"upcomingFixtures":[{"id":100`) {
+		t.Fatalf("unexpected scoped analysis response: status=%d body=%s", analysisResponse.Code, analysisResponse.Body.String())
+	}
+	missingScopeResponse := httptest.NewRecorder()
+	readAPI.Handler().ServeHTTP(missingScopeResponse, httptest.NewRequest(http.MethodGet, "/api/v1/analysis/players/10", nil))
+	if missingScopeResponse.Code != http.StatusBadRequest {
+		t.Fatalf("historical analysis accepted an implicit scope: status=%d body=%s", missingScopeResponse.Code, missingScopeResponse.Body.String())
+	}
 }

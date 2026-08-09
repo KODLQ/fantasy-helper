@@ -213,6 +213,30 @@ type PlayerDetail struct {
 	Freshness Freshness       `json:"freshness"`
 }
 
+type PlayerAnalysis struct {
+	SnapshotID       string    `json:"snapshotId"`
+	SeasonID         int       `json:"seasonId"`
+	Gameweek         int       `json:"gameweek"`
+	PlayerID         int       `json:"playerId"`
+	WebName          string    `json:"webName"`
+	TeamID           int       `json:"teamId"`
+	TeamName         string    `json:"teamName"`
+	Price            float64   `json:"price"`
+	PriceChange      float64   `json:"priceChange"`
+	Ownership        float64   `json:"ownership"`
+	OwnershipChange  float64   `json:"ownershipChange"`
+	Form             float64   `json:"form"`
+	RollingPoints    float64   `json:"rollingPoints"`
+	TotalPoints      int       `json:"totalPoints"`
+	Minutes          int       `json:"minutes"`
+	Value            float64   `json:"value"`
+	ValueChange      float64   `json:"valueChange"`
+	Status           string    `json:"status"`
+	ChanceOfPlaying  *int      `json:"chanceOfPlayingNextRound,omitempty"`
+	ObservedAt       time.Time `json:"observedAt"`
+	UpcomingFixtures []Fixture `json:"upcomingFixtures"`
+}
+
 type Squad struct {
 	Name              string            `json:"name"`
 	Budget            float64           `json:"budget"`
