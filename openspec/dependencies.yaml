@@ -2,6 +2,18 @@ version: 1
 
 ci:
   command: ./scripts/validate-openspec-portfolio
+  order:
+    - fpl-research-assistant-foundation
+    - technical-debt-foundation
+    - fpl-public-data-warehouse
+    - local-user-authentication
+    - fpl-manager-league-sync
+    - fpl-analysis-workbench
+    - fpl-league-gameweek-insights
+    - fpl-transfer-fixture-research
+    - fpl-recommendation-evaluation
+    - fpl-live-alerts-storyline
+    - fpl-optimal-team-learning
   checks:
     - dependency-registry-schema
     - unknown-change-references
