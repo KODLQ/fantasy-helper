@@ -36,7 +36,17 @@ type DatasetSnapshotRepository interface {
 
 type ResearchReadRepository interface {
 	SearchPlayers(context.Context, PlayerQuery) ([]Player, int, error)
-	LoadPlayerDetail(context.Context, int) (PlayerDetail, bool, error)
+	LoadPlayerDetail(context.Context, int, int) (PlayerDetail, bool, error)
+}
+
+type SeasonCatalogueRepository interface {
+	ListSeasons(context.Context) ([]SeasonCatalogueItem, error)
+	LoadSnapshotForSeason(context.Context, int) (Snapshot, bool, error)
+}
+
+type SeasonSquadRepository interface {
+	LoadSquadForSeason(context.Context, int) (Squad, bool, error)
+	SaveSquadForSeason(context.Context, int, Squad) error
 }
 
 type HistoricalResearchRepository interface {
@@ -446,19 +456,36 @@ func (r *PostgresRepository) EnsureSchema(ctx context.Context) error {
 }
 
 func (r *PostgresRepository) LoadSnapshot(ctx context.Context) (Snapshot, bool, error) {
-	var snapshot Snapshot
 	var seasonSourceID int
-	if err := r.db.QueryRowContext(ctx, `SELECT source_id, name, is_current, updated_at FROM seasons WHERE is_current ORDER BY updated_at DESC LIMIT 1`).Scan(&seasonSourceID, &snapshot.Season.Name, &snapshot.Season.IsCurrent, &snapshot.Season.UpdatedAt); err != nil {
+	if err := r.db.QueryRowContext(ctx, `SELECT source_id FROM seasons WHERE is_current ORDER BY updated_at DESC LIMIT 1`).Scan(&seasonSourceID); err != nil {
 		if err == sql.ErrNoRows {
 			return Snapshot{}, false, nil
 		}
 		return Snapshot{}, false, fmt.Errorf("load current season: %w", err)
 	}
-	snapshot.Season.ID = seasonSourceID
-	seasonDBID, err := r.currentSeasonID(ctx)
-	if err != nil {
-		return Snapshot{}, false, err
+	return r.LoadSnapshotForSeason(ctx, seasonSourceID)
+}
+
+func (r *PostgresRepository) LoadSnapshotForSeason(ctx context.Context, seasonSourceID int) (Snapshot, bool, error) {
+	var snapshot Snapshot
+	var err error
+	var seasonDBID int64
+	var sourceKind string
+	var completeness, missingInputs, warnings []byte
+	var lastImported sql.NullTime
+	if err := r.db.QueryRowContext(ctx, `SELECT id, source_id, name, is_current, source_kind, last_imported_at, completeness, missing_inputs, warnings, updated_at FROM seasons WHERE source_id=$1`, seasonSourceID).Scan(&seasonDBID, &snapshot.Season.ID, &snapshot.Season.Name, &snapshot.Season.IsCurrent, &sourceKind, &lastImported, &completeness, &missingInputs, &warnings, &snapshot.Season.UpdatedAt); err != nil {
+		if err == sql.ErrNoRows {
+			return Snapshot{}, false, nil
+		}
+		return Snapshot{}, false, fmt.Errorf("load season %d: %w", seasonSourceID, err)
 	}
+	snapshot.Season.SourceKind = SourceKind(sourceKind)
+	if lastImported.Valid {
+		snapshot.Season.LastImportedAt = lastImported.Time
+	}
+	_ = json.Unmarshal(completeness, &snapshot.Season.Completeness)
+	_ = json.Unmarshal(missingInputs, &snapshot.Season.MissingInputs)
+	_ = json.Unmarshal(warnings, &snapshot.Season.Warnings)
 	snapshot.Gameweeks, err = r.loadGameweeks(ctx, seasonDBID)
 	if err != nil {
 		return Snapshot{}, false, err
@@ -482,8 +509,66 @@ func (r *PostgresRepository) LoadSnapshot(ctx context.Context) (Snapshot, bool, 
 	return snapshot, true, nil
 }
 
+func (r *PostgresRepository) ListSeasons(ctx context.Context) ([]SeasonCatalogueItem, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT s.id, s.source_id, s.name, s.is_current, s.source_kind, s.last_imported_at, s.completeness, s.missing_inputs, s.warnings FROM seasons s WHERE EXISTS (SELECT 1 FROM gameweeks g WHERE g.season_id=s.id) OR EXISTS (SELECT 1 FROM teams t WHERE t.season_id=s.id) OR EXISTS (SELECT 1 FROM players p WHERE p.season_id=s.id) ORDER BY s.source_id DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("list seasons: %w", err)
+	}
+	defer rows.Close()
+	items := []SeasonCatalogueItem{}
+	for rows.Next() {
+		var dbID int64
+		var current bool
+		var sourceKind string
+		var lastImported sql.NullTime
+		var completeness, missingInputs, warnings []byte
+		var item SeasonCatalogueItem
+		if err := rows.Scan(&dbID, &item.ID, &item.Name, &current, &sourceKind, &lastImported, &completeness, &missingInputs, &warnings); err != nil {
+			return nil, err
+		}
+		item.State = SeasonHistorical
+		if current {
+			item.State = SeasonCurrent
+		}
+		item.SourceKind = SourceKind(sourceKind)
+		if lastImported.Valid {
+			item.LastImportedAt = lastImported.Time
+		}
+		item.Completeness = map[string]interface{}{}
+		item.MissingInputs = []string{}
+		item.Warnings = []string{}
+		_ = json.Unmarshal(completeness, &item.Completeness)
+		_ = json.Unmarshal(missingInputs, &item.MissingInputs)
+		_ = json.Unmarshal(warnings, &item.Warnings)
+		if item.Completeness == nil {
+			item.Completeness = map[string]interface{}{}
+		}
+		if item.MissingInputs == nil {
+			item.MissingInputs = []string{}
+		}
+		if item.Warnings == nil {
+			item.Warnings = []string{}
+		}
+		item.AvailableGameweeks, err = r.loadGameweeks(ctx, dbID)
+		if err != nil {
+			return nil, err
+		}
+		item.DefaultGameweek = DefaultGameweek(item.State, item.AvailableGameweeks)
+		item.Freshness, err = r.CurrentDatasetFreshness(ctx, Scope{SeasonID: item.ID})
+		if err != nil {
+			return nil, err
+		}
+		if len(item.MissingInputs) > 0 && item.Freshness.State == "actual" {
+			item.Freshness.State = "partial"
+			item.Freshness.Status = "partial"
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
 func (r *PostgresRepository) ListDatasetSnapshots(ctx context.Context, scope Scope) ([]DatasetSnapshot, error) {
-	query := `SELECT d.id::text, d.dataset, d.state, s.source_id, COALESCE(g.source_id, 0), d.source_fetched_at, d.normalized_at, d.normalizer_version, d.missing_inputs FROM dataset_snapshots d JOIN seasons s ON s.id=d.season_id LEFT JOIN gameweeks g ON g.id=d.gameweek_id WHERE ($1=0 OR s.source_id=$1) AND ($2=0 OR g.source_id=$2) AND ($3='' OR d.dataset=$3) ORDER BY d.normalized_at DESC`
+	query := `SELECT d.id::text, d.dataset, d.state, s.source_id, COALESCE(g.source_id, 0), d.source_fetched_at, d.normalized_at, d.normalizer_version, d.missing_inputs, d.source_kind, d.source_version, d.supported_datasets, COALESCE(d.manifest_checksum,'') FROM dataset_snapshots d JOIN seasons s ON s.id=d.season_id LEFT JOIN gameweeks g ON g.id=d.gameweek_id WHERE ($1=0 OR s.source_id=$1) AND ($2=0 OR g.source_id=$2) AND ($3='' OR d.dataset=$3) ORDER BY d.normalized_at DESC`
 	rows, err := r.db.QueryContext(ctx, query, scope.SeasonID, scope.Gameweek, scope.Dataset)
 	if err != nil {
 		return nil, fmt.Errorf("list dataset snapshots: %w", err)
@@ -493,8 +578,8 @@ func (r *PostgresRepository) ListDatasetSnapshots(ctx context.Context, scope Sco
 	for rows.Next() {
 		var item DatasetSnapshot
 		var sourceFetched sql.NullTime
-		var missing []byte
-		if err := rows.Scan(&item.ID, &item.Dataset, &item.State, &item.SeasonID, &item.Gameweek, &sourceFetched, &item.NormalizedAt, &item.NormalizerVersion, &missing); err != nil {
+		var missing, supported []byte
+		if err := rows.Scan(&item.ID, &item.Dataset, &item.State, &item.SeasonID, &item.Gameweek, &sourceFetched, &item.NormalizedAt, &item.NormalizerVersion, &missing, &item.SourceKind, &item.SourceVersion, &supported, &item.ManifestChecksum); err != nil {
 			return nil, err
 		}
 		if sourceFetched.Valid {
@@ -502,6 +587,9 @@ func (r *PostgresRepository) ListDatasetSnapshots(ctx context.Context, scope Sco
 		}
 		if len(missing) > 0 {
 			_ = json.Unmarshal(missing, &item.MissingInputs)
+		}
+		if len(supported) > 0 {
+			_ = json.Unmarshal(supported, &item.SupportedDatasets)
 		}
 		items = append(items, item)
 	}
@@ -518,6 +606,12 @@ func (r *PostgresRepository) CreateDatasetSnapshot(ctx context.Context, item Dat
 	if item.NormalizerVersion == "" {
 		item.NormalizerVersion = "fpl-public-v1"
 	}
+	if item.SourceKind == "" {
+		item.SourceKind = SourceOfficialCurrent
+	}
+	if item.SourceVersion == "" {
+		item.SourceVersion = item.NormalizerVersion
+	}
 	if item.NormalizedAt.IsZero() {
 		item.NormalizedAt = time.Now().UTC()
 	}
@@ -529,7 +623,11 @@ func (r *PostgresRepository) CreateDatasetSnapshot(ctx context.Context, item Dat
 	if !item.SourceFetchedAt.IsZero() {
 		sourceFetched = item.SourceFetchedAt
 	}
-	_, err = r.db.ExecContext(ctx, `INSERT INTO dataset_snapshots (id, season_id, gameweek_id, dataset, state, source_fetched_at, normalized_at, normalizer_version, missing_inputs) VALUES ($1, (SELECT id FROM seasons WHERE source_id=$2 ORDER BY is_current DESC, updated_at DESC LIMIT 1), (SELECT g.id FROM gameweeks g JOIN seasons s ON s.id=g.season_id WHERE s.source_id=$2 AND g.source_id=$3 LIMIT 1), $4, $5, $6, $7, $8, $9) ON CONFLICT (id) DO UPDATE SET state=EXCLUDED.state, source_fetched_at=EXCLUDED.source_fetched_at, normalized_at=EXCLUDED.normalized_at, normalizer_version=EXCLUDED.normalizer_version, missing_inputs=EXCLUDED.missing_inputs`, item.ID, item.SeasonID, item.Gameweek, item.Dataset, item.State, sourceFetched, item.NormalizedAt, item.NormalizerVersion, missing)
+	supported, err := json.Marshal(item.SupportedDatasets)
+	if err != nil {
+		return fmt.Errorf("encode supported datasets: %w", err)
+	}
+	_, err = r.db.ExecContext(ctx, `INSERT INTO dataset_snapshots (id, season_id, gameweek_id, dataset, state, source_fetched_at, normalized_at, normalizer_version, missing_inputs, source_kind, source_version, supported_datasets, manifest_checksum) VALUES ($1, (SELECT id FROM seasons WHERE source_id=$2 ORDER BY is_current DESC, updated_at DESC LIMIT 1), (SELECT g.id FROM gameweeks g JOIN seasons s ON s.id=g.season_id WHERE s.source_id=$2 AND g.source_id=$3 LIMIT 1), $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) ON CONFLICT (id) DO UPDATE SET state=EXCLUDED.state, source_fetched_at=EXCLUDED.source_fetched_at, normalized_at=EXCLUDED.normalized_at, normalizer_version=EXCLUDED.normalizer_version, missing_inputs=EXCLUDED.missing_inputs, source_kind=EXCLUDED.source_kind, source_version=EXCLUDED.source_version, supported_datasets=EXCLUDED.supported_datasets, manifest_checksum=EXCLUDED.manifest_checksum`, item.ID, item.SeasonID, item.Gameweek, item.Dataset, item.State, sourceFetched, item.NormalizedAt, item.NormalizerVersion, missing, item.SourceKind, item.SourceVersion, supported, nullableString(item.ManifestChecksum))
 	if err != nil {
 		return fmt.Errorf("create dataset snapshot: %w", err)
 	}
@@ -570,8 +668,8 @@ func (r *PostgresRepository) CurrentDatasetFreshness(ctx context.Context, scope 
 }
 
 func (r *PostgresRepository) SearchPlayers(ctx context.Context, q PlayerQuery) ([]Player, int, error) {
-	where := []string{"s.is_current"}
-	args := []interface{}{}
+	where := []string{"(s.source_id=$1 OR ($1=0 AND s.is_current))"}
+	args := []interface{}{q.SeasonID}
 	add := func(clause string, value interface{}) {
 		args = append(args, value)
 		where = append(where, fmt.Sprintf(clause, len(args)))
@@ -660,11 +758,11 @@ func scanPlayerWithTotal(scanner rowScanner) (Player, int, error) {
 	return item, total, err
 }
 
-func (r *PostgresRepository) LoadPlayerDetail(ctx context.Context, sourcePlayerID int) (PlayerDetail, bool, error) {
+func (r *PostgresRepository) LoadPlayerDetail(ctx context.Context, seasonSourceID, sourcePlayerID int) (PlayerDetail, bool, error) {
 	detail := PlayerDetail{History: []PlayerHistory{}, Fixtures: []Fixture{}}
 	var chance sql.NullInt64
 	var teamID int
-	err := r.db.QueryRowContext(ctx, `SELECT p.source_id, p.first_name, p.second_name, p.web_name, p.position, t.source_id, p.price, p.total_points, p.form, p.minutes, p.value, p.status, p.news, p.chance_of_playing_next_round, p.goals_scored, p.assists, p.clean_sheets, p.bonus, p.saves, p.expected_minutes, p.recent_returns, t.name, t.short_name FROM players p JOIN teams t ON t.id=p.team_id JOIN seasons s ON s.id=p.season_id WHERE s.is_current AND p.source_id=$1 ORDER BY s.updated_at DESC LIMIT 1`, sourcePlayerID).Scan(&detail.Player.ID, &detail.Player.FirstName, &detail.Player.SecondName, &detail.Player.WebName, &detail.Player.Position, &teamID, &detail.Player.Price, &detail.Player.TotalPoints, &detail.Player.Form, &detail.Player.Minutes, &detail.Player.Value, &detail.Player.Status, &detail.Player.News, &chance, &detail.Player.GoalsScored, &detail.Player.Assists, &detail.Player.CleanSheets, &detail.Player.Bonus, &detail.Player.Saves, &detail.Player.ExpectedMinutes, &detail.Player.RecentReturns, &detail.Team.Name, &detail.Team.ShortName)
+	err := r.db.QueryRowContext(ctx, `SELECT p.source_id, p.first_name, p.second_name, p.web_name, p.position, t.source_id, p.price, p.total_points, p.form, p.minutes, p.value, p.status, p.news, p.chance_of_playing_next_round, p.goals_scored, p.assists, p.clean_sheets, p.bonus, p.saves, p.expected_minutes, p.recent_returns, t.name, t.short_name FROM players p JOIN teams t ON t.id=p.team_id JOIN seasons s ON s.id=p.season_id WHERE (s.source_id=$1 OR ($1=0 AND s.is_current)) AND p.source_id=$2 ORDER BY s.updated_at DESC LIMIT 1`, seasonSourceID, sourcePlayerID).Scan(&detail.Player.ID, &detail.Player.FirstName, &detail.Player.SecondName, &detail.Player.WebName, &detail.Player.Position, &teamID, &detail.Player.Price, &detail.Player.TotalPoints, &detail.Player.Form, &detail.Player.Minutes, &detail.Player.Value, &detail.Player.Status, &detail.Player.News, &chance, &detail.Player.GoalsScored, &detail.Player.Assists, &detail.Player.CleanSheets, &detail.Player.Bonus, &detail.Player.Saves, &detail.Player.ExpectedMinutes, &detail.Player.RecentReturns, &detail.Team.Name, &detail.Team.ShortName)
 	if err == sql.ErrNoRows {
 		return PlayerDetail{}, false, nil
 	}
@@ -676,7 +774,7 @@ func (r *PostgresRepository) LoadPlayerDetail(ctx context.Context, sourcePlayerI
 		value := int(chance.Int64)
 		detail.Player.ChanceOfPlaying = &value
 	}
-	historyRows, err := r.db.QueryContext(ctx, `SELECT g.source_id, h.minutes, h.total_points, h.goals_scored, h.assists, h.clean_sheets, h.bonus, COALESCE(h.value,0) FROM player_gameweek_history h JOIN players p ON p.id=h.player_id JOIN gameweeks g ON g.id=h.gameweek_id JOIN seasons s ON s.id=h.season_id WHERE s.is_current AND p.source_id=$1 ORDER BY g.source_id`, sourcePlayerID)
+	historyRows, err := r.db.QueryContext(ctx, `SELECT g.source_id, h.minutes, h.total_points, h.goals_scored, h.assists, h.clean_sheets, h.bonus, COALESCE(h.value,0) FROM player_gameweek_history h JOIN players p ON p.id=h.player_id JOIN gameweeks g ON g.id=h.gameweek_id JOIN seasons s ON s.id=h.season_id WHERE (s.source_id=$1 OR ($1=0 AND s.is_current)) AND p.source_id=$2 ORDER BY g.source_id`, seasonSourceID, sourcePlayerID)
 	if err != nil {
 		return PlayerDetail{}, false, err
 	}
@@ -693,7 +791,7 @@ func (r *PostgresRepository) LoadPlayerDetail(ctx context.Context, sourcePlayerI
 		return PlayerDetail{}, false, err
 	}
 	historyRows.Close()
-	fixtureRows, err := r.db.QueryContext(ctx, `SELECT f.source_id, COALESCE(g.source_id,0), f.kickoff_time, f.finished, h.source_id, a.source_id, COALESCE(f.team_home_difficulty,0), COALESCE(f.team_away_difficulty,0), f.team_home_score, f.team_away_score FROM fixtures f JOIN teams h ON h.id=f.team_home_id JOIN teams a ON a.id=f.team_away_id JOIN seasons s ON s.id=f.season_id LEFT JOIN gameweeks g ON g.id=f.gameweek_id WHERE s.is_current AND f.finished=FALSE AND (h.source_id=$1 OR a.source_id=$1) ORDER BY f.kickoff_time NULLS LAST`, teamID)
+	fixtureRows, err := r.db.QueryContext(ctx, `SELECT f.source_id, COALESCE(g.source_id,0), f.kickoff_time, f.finished, h.source_id, a.source_id, COALESCE(f.team_home_difficulty,0), COALESCE(f.team_away_difficulty,0), f.team_home_score, f.team_away_score FROM fixtures f JOIN teams h ON h.id=f.team_home_id JOIN teams a ON a.id=f.team_away_id JOIN seasons s ON s.id=f.season_id LEFT JOIN gameweeks g ON g.id=f.gameweek_id WHERE (s.source_id=$1 OR ($1=0 AND s.is_current)) AND f.finished=FALSE AND (h.source_id=$2 OR a.source_id=$2) ORDER BY f.kickoff_time NULLS LAST`, seasonSourceID, teamID)
 	if err != nil {
 		return PlayerDetail{}, false, err
 	}
@@ -748,6 +846,12 @@ func (r *PostgresRepository) currentSeasonID(ctx context.Context) (int64, error)
 		return 0, fmt.Errorf("load current season id: %w", err)
 	}
 	return id, nil
+}
+
+func (r *PostgresRepository) currentSeasonSourceID(ctx context.Context) (int, error) {
+	var id int
+	err := r.db.QueryRowContext(ctx, `SELECT source_id FROM seasons WHERE is_current ORDER BY updated_at DESC LIMIT 1`).Scan(&id)
+	return id, err
 }
 
 func (r *PostgresRepository) loadGameweeks(ctx context.Context, seasonID int64) ([]Gameweek, error) {
@@ -838,12 +942,42 @@ func (r *PostgresRepository) loadHistories(ctx context.Context, seasonID int64) 
 
 func (r *PostgresRepository) UpsertSnapshot(ctx context.Context, snapshot Snapshot) error {
 	return r.WithTransaction(ctx, func(tx *sql.Tx) error {
-		var seasonID int64
-		if err := tx.QueryRowContext(ctx, `INSERT INTO seasons (source_id, name, is_current, updated_at) VALUES ($1,$2,$3,NOW()) ON CONFLICT (source_id) DO UPDATE SET name=EXCLUDED.name, is_current=EXCLUDED.is_current, updated_at=NOW() RETURNING id`, snapshot.Season.ID, snapshot.Season.Name, snapshot.Season.IsCurrent).Scan(&seasonID); err != nil {
-			return fmt.Errorf("upsert season: %w", err)
+		if snapshot.Season.SourceKind == "" {
+			snapshot.Season.SourceKind = SourceOfficialCurrent
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE seasons SET is_current=FALSE WHERE id<>$1`, seasonID); err != nil {
-			return err
+		if snapshot.Season.SourceKind != SourceOfficialCurrent {
+			snapshot.Season.IsCurrent = false
+		}
+		if snapshot.Season.IsCurrent {
+			if _, err := tx.ExecContext(ctx, `UPDATE seasons SET is_current=FALSE, source_kind=CASE WHEN source_kind='official-current' THEN 'retained-snapshot' ELSE source_kind END WHERE is_current AND source_id<>$1`, snapshot.Season.ID); err != nil {
+				return fmt.Errorf("roll current season forward: %w", err)
+			}
+			if _, err := tx.ExecContext(ctx, `UPDATE seasons SET source_kind='retained-snapshot' WHERE NOT is_current AND source_id<>$1 AND source_kind='official-current'`, snapshot.Season.ID); err != nil {
+				return fmt.Errorf("normalize historical season provenance: %w", err)
+			}
+			if _, err := tx.ExecContext(ctx, `UPDATE gameweeks SET is_current=FALSE WHERE season_id IN (SELECT id FROM seasons WHERE source_id<>$1) AND is_current`, snapshot.Season.ID); err != nil {
+				return fmt.Errorf("clear historical current gameweek: %w", err)
+			}
+		}
+		if snapshot.Season.Completeness == nil {
+			snapshot.Season.Completeness = map[string]interface{}{}
+		}
+		if snapshot.Season.MissingInputs == nil {
+			snapshot.Season.MissingInputs = []string{}
+		}
+		if snapshot.Season.Warnings == nil {
+			snapshot.Season.Warnings = []string{}
+		}
+		completeness, _ := json.Marshal(snapshot.Season.Completeness)
+		missingInputs, _ := json.Marshal(snapshot.Season.MissingInputs)
+		warnings, _ := json.Marshal(snapshot.Season.Warnings)
+		importedAt := snapshot.Season.LastImportedAt
+		if importedAt.IsZero() {
+			importedAt = time.Now().UTC()
+		}
+		var seasonID int64
+		if err := tx.QueryRowContext(ctx, `INSERT INTO seasons (source_id, name, is_current, source_kind, last_imported_at, completeness, missing_inputs, warnings, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW()) ON CONFLICT (source_id) DO UPDATE SET name=EXCLUDED.name, is_current=CASE WHEN EXCLUDED.source_kind='official-current' THEN EXCLUDED.is_current ELSE seasons.is_current END, source_kind=EXCLUDED.source_kind, last_imported_at=EXCLUDED.last_imported_at, completeness=EXCLUDED.completeness, missing_inputs=EXCLUDED.missing_inputs, warnings=EXCLUDED.warnings, updated_at=NOW() RETURNING id`, snapshot.Season.ID, snapshot.Season.Name, snapshot.Season.IsCurrent, snapshot.Season.SourceKind, importedAt, completeness, missingInputs, warnings).Scan(&seasonID); err != nil {
+			return fmt.Errorf("upsert season: %w", err)
 		}
 		weeks := map[int]int64{}
 		for _, week := range snapshot.Gameweeks {
@@ -921,9 +1055,20 @@ func (r *PostgresRepository) UpsertSnapshot(ctx context.Context, snapshot Snapsh
 }
 
 func (r *PostgresRepository) LoadSquad(ctx context.Context) (Squad, bool, error) {
+	seasonID, err := r.currentSeasonSourceID(ctx)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return Squad{}, false, nil
+		}
+		return Squad{}, false, err
+	}
+	return r.LoadSquadForSeason(ctx, seasonID)
+}
+
+func (r *PostgresRepository) LoadSquadForSeason(ctx context.Context, seasonSourceID int) (Squad, bool, error) {
 	var squad Squad
 	var planID int64
-	if err := r.db.QueryRowContext(ctx, `SELECT id, name, budget FROM squad_plans ORDER BY id LIMIT 1`).Scan(&planID, &squad.Name, &squad.Budget); err != nil {
+	if err := r.db.QueryRowContext(ctx, `SELECT sp.id, sp.name, sp.budget FROM squad_plans sp JOIN seasons s ON s.id=sp.season_id WHERE s.source_id=$1 ORDER BY sp.id LIMIT 1`, seasonSourceID).Scan(&planID, &squad.Name, &squad.Budget); err != nil {
 		if err == sql.ErrNoRows {
 			return Squad{}, false, nil
 		}
@@ -968,17 +1113,26 @@ func (r *PostgresRepository) LoadSquad(ctx context.Context) (Squad, bool, error)
 }
 
 func (r *PostgresRepository) SaveSquad(ctx context.Context, squad Squad) error {
+	seasonID, err := r.currentSeasonSourceID(ctx)
+	if err != nil {
+		return err
+	}
+	return r.SaveSquadForSeason(ctx, seasonID, squad)
+}
+
+func (r *PostgresRepository) SaveSquadForSeason(ctx context.Context, seasonSourceID int, squad Squad) error {
 	return r.WithTransaction(ctx, func(tx *sql.Tx) error {
 		var planID int64
-		if err := tx.QueryRowContext(ctx, `SELECT id FROM squad_plans ORDER BY id LIMIT 1`).Scan(&planID); err != nil {
+		var seasonDBID int64
+		if err := tx.QueryRowContext(ctx, `SELECT id FROM seasons WHERE source_id=$1`, seasonSourceID).Scan(&seasonDBID); err != nil {
+			return fmt.Errorf("resolve squad season %d: %w", seasonSourceID, err)
+		}
+		if err := tx.QueryRowContext(ctx, `SELECT id FROM squad_plans WHERE season_id=$1 ORDER BY id LIMIT 1`, seasonDBID).Scan(&planID); err != nil {
 			if err != sql.ErrNoRows {
 				return err
 			}
-			if _, insertErr := tx.ExecContext(ctx, `INSERT INTO squad_plans (name, budget) VALUES ($1,$2)`, squad.Name, squad.Budget); insertErr != nil {
+			if insertErr := tx.QueryRowContext(ctx, `INSERT INTO squad_plans (name, budget, season_id) VALUES ($1,$2,$3) RETURNING id`, squad.Name, squad.Budget, seasonDBID).Scan(&planID); insertErr != nil {
 				return insertErr
-			}
-			if queryErr := tx.QueryRowContext(ctx, `SELECT id FROM squad_plans ORDER BY id LIMIT 1`).Scan(&planID); queryErr != nil {
-				return queryErr
 			}
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE squad_plans SET name=$1, budget=$2, updated_at=NOW() WHERE id=$3`, squad.Name, squad.Budget, planID); err != nil {
@@ -993,7 +1147,7 @@ func (r *PostgresRepository) SaveSquad(ctx context.Context, squad Squad) error {
 		}
 		sort.Ints(ids)
 		for _, sourceID := range ids {
-			dbID, err := r.resolvePlayerID(ctx, tx, sourceID)
+			dbID, err := r.resolvePlayerID(ctx, tx, seasonSourceID, sourceID)
 			if err != nil {
 				return err
 			}
@@ -1001,19 +1155,19 @@ func (r *PostgresRepository) SaveSquad(ctx context.Context, squad Squad) error {
 				return err
 			}
 		}
-		starts, err := r.resolvePlayerIDs(ctx, tx, squad.StartingPlayerIDs)
+		starts, err := r.resolvePlayerIDs(ctx, tx, seasonSourceID, squad.StartingPlayerIDs)
 		if err != nil {
 			return err
 		}
-		bench, err := r.resolvePlayerIDs(ctx, tx, squad.BenchPlayerIDs)
+		bench, err := r.resolvePlayerIDs(ctx, tx, seasonSourceID, squad.BenchPlayerIDs)
 		if err != nil {
 			return err
 		}
-		captain, err := r.resolveOptionalPlayerID(ctx, tx, squad.CaptainID)
+		captain, err := r.resolveOptionalPlayerID(ctx, tx, seasonSourceID, squad.CaptainID)
 		if err != nil {
 			return err
 		}
-		vice, err := r.resolveOptionalPlayerID(ctx, tx, squad.ViceCaptainID)
+		vice, err := r.resolveOptionalPlayerID(ctx, tx, seasonSourceID, squad.ViceCaptainID)
 		if err != nil {
 			return err
 		}
@@ -1023,19 +1177,19 @@ func (r *PostgresRepository) SaveSquad(ctx context.Context, squad Squad) error {
 	})
 }
 
-func (r *PostgresRepository) resolvePlayerID(ctx context.Context, tx *sql.Tx, sourceID int) (int64, error) {
+func (r *PostgresRepository) resolvePlayerID(ctx context.Context, tx *sql.Tx, seasonSourceID, sourceID int) (int64, error) {
 	var id int64
-	err := tx.QueryRowContext(ctx, `SELECT p.id FROM players p JOIN seasons s ON s.id=p.season_id WHERE p.source_id=$1 AND s.is_current ORDER BY s.updated_at DESC LIMIT 1`, sourceID).Scan(&id)
+	err := tx.QueryRowContext(ctx, `SELECT p.id FROM players p JOIN seasons s ON s.id=p.season_id WHERE s.source_id=$1 AND p.source_id=$2`, seasonSourceID, sourceID).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("resolve player %d: %w", sourceID, err)
 	}
 	return id, nil
 }
 
-func (r *PostgresRepository) resolvePlayerIDs(ctx context.Context, tx *sql.Tx, sourceIDs []int) ([]int64, error) {
+func (r *PostgresRepository) resolvePlayerIDs(ctx context.Context, tx *sql.Tx, seasonSourceID int, sourceIDs []int) ([]int64, error) {
 	ids := make([]int64, 0, len(sourceIDs))
 	for _, sourceID := range sourceIDs {
-		id, err := r.resolvePlayerID(ctx, tx, sourceID)
+		id, err := r.resolvePlayerID(ctx, tx, seasonSourceID, sourceID)
 		if err != nil {
 			return nil, err
 		}
@@ -1044,11 +1198,11 @@ func (r *PostgresRepository) resolvePlayerIDs(ctx context.Context, tx *sql.Tx, s
 	return ids, nil
 }
 
-func (r *PostgresRepository) resolveOptionalPlayerID(ctx context.Context, tx *sql.Tx, sourceID int) (int64, error) {
+func (r *PostgresRepository) resolveOptionalPlayerID(ctx context.Context, tx *sql.Tx, seasonSourceID, sourceID int) (int64, error) {
 	if sourceID == 0 {
 		return 0, nil
 	}
-	return r.resolvePlayerID(ctx, tx, sourceID)
+	return r.resolvePlayerID(ctx, tx, seasonSourceID, sourceID)
 }
 
 func (r *PostgresRepository) sourceIDsFromDBIDs(ctx context.Context, ids []int) []int {

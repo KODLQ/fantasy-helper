@@ -15,6 +15,20 @@ import (
 
 type failingSnapshotRepository struct{}
 
+type catalogueTestRepository struct {
+	archiveTestRepository
+	items []SeasonCatalogueItem
+	err   error
+}
+
+func (repository *catalogueTestRepository) ListSeasons(context.Context) ([]SeasonCatalogueItem, error) {
+	return repository.items, repository.err
+}
+
+func (repository *catalogueTestRepository) LoadSnapshotForSeason(context.Context, int) (Snapshot, bool, error) {
+	return repository.snapshot, repository.snapshot.Season.ID > 0, nil
+}
+
 func (failingSnapshotRepository) EnsureSchema(context.Context) error { return nil }
 func (failingSnapshotRepository) LoadSnapshot(context.Context) (Snapshot, bool, error) {
 	return Snapshot{}, false, nil
@@ -99,6 +113,67 @@ func TestAPIHandlesEmptyAndUnknownResearchResults(t *testing.T) {
 	handler.ServeHTTP(unknown, httptest.NewRequest(http.MethodGet, "/api/v1/players/9999", nil))
 	if unknown.Code != http.StatusNotFound {
 		t.Fatalf("unknown player status = %d", unknown.Code)
+	}
+}
+
+func TestAPIListsSeasonsAndRejectsUnknownExplicitSeason(t *testing.T) {
+	api := NewAPI(NewStore(), NewFPLSource("http://127.0.0.1:1"), nil, nil)
+	seasons := httptest.NewRecorder()
+	api.Handler().ServeHTTP(seasons, httptest.NewRequest(http.MethodGet, "/api/v1/seasons", nil))
+	if seasons.Code != http.StatusOK || !strings.Contains(seasons.Body.String(), `"items":[{"id":1`) || !strings.Contains(seasons.Body.String(), `"defaultGameweek":1`) {
+		t.Fatalf("unexpected season catalogue: status=%d body=%s", seasons.Code, seasons.Body.String())
+	}
+	unknown := httptest.NewRecorder()
+	api.Handler().ServeHTTP(unknown, httptest.NewRequest(http.MethodGet, "/api/v1/players?seasonId=999", nil))
+	if unknown.Code != http.StatusNotFound || !strings.Contains(unknown.Body.String(), `"code":"SEASON_NOT_FOUND"`) {
+		t.Fatalf("unexpected unknown season response: status=%d body=%s", unknown.Code, unknown.Body.String())
+	}
+}
+
+func TestAPISeasonContractCoversEmptyPartialUnavailableAndOmittedScope(t *testing.T) {
+	current := SeasonCatalogueItem{ID: 2026, Name: "2026/27", State: SeasonCurrent, SourceKind: SourceOfficialCurrent, Freshness: Freshness{State: "actual", Status: "fresh"}, Completeness: map[string]interface{}{"catalogue": true}, MissingInputs: []string{}, Warnings: []string{}}
+	partial := SeasonCatalogueItem{ID: 2025, Name: "2025/26", State: SeasonHistorical, SourceKind: SourceHistoricalArchive, Freshness: Freshness{State: "partial", Status: "partial"}, Completeness: map[string]interface{}{"catalogue": true}, MissingInputs: []string{"live"}, Warnings: []string{"live unavailable"}}
+	unavailable := SeasonCatalogueItem{ID: 2024, Name: "2024/25", State: SeasonHistorical, SourceKind: SourceHistoricalArchive, Freshness: Freshness{State: "unavailable", Status: "unavailable"}, Completeness: map[string]interface{}{"catalogue": false}, MissingInputs: []string{"catalogue"}, Warnings: []string{}}
+	repository := &catalogueTestRepository{items: []SeasonCatalogueItem{current, partial, unavailable}}
+	api := NewAPI(NewStore(), NewFPLSource("http://127.0.0.1:1"), nil, nil, repository)
+
+	listed := httptest.NewRecorder()
+	api.Handler().ServeHTTP(listed, httptest.NewRequest(http.MethodGet, "/api/v1/seasons", nil))
+	if listed.Code != http.StatusOK || !strings.Contains(listed.Body.String(), `"id":2026`) || !strings.Contains(listed.Body.String(), `"state":"partial"`) || !strings.Contains(listed.Body.String(), `"missingInputs":["catalogue"]`) {
+		t.Fatalf("partial/unavailable catalogue contract failed: %d %s", listed.Code, listed.Body.String())
+	}
+	unavailableResponse := httptest.NewRecorder()
+	api.Handler().ServeHTTP(unavailableResponse, httptest.NewRequest(http.MethodGet, "/api/v1/players?seasonId=2024", nil))
+	if unavailableResponse.Code != http.StatusConflict || !strings.Contains(unavailableResponse.Body.String(), `"code":"SEASON_DATA_UNAVAILABLE"`) {
+		t.Fatalf("unavailable season contract failed: %d %s", unavailableResponse.Code, unavailableResponse.Body.String())
+	}
+
+	emptyAPI := NewAPI(NewStore(), NewFPLSource("http://127.0.0.1:1"), nil, nil, &catalogueTestRepository{})
+	empty := httptest.NewRecorder()
+	emptyAPI.Handler().ServeHTTP(empty, httptest.NewRequest(http.MethodGet, "/api/v1/seasons", nil))
+	if empty.Code != http.StatusOK || !strings.Contains(empty.Body.String(), `"items":[]`) || !strings.Contains(empty.Body.String(), `"state":"unavailable"`) {
+		t.Fatalf("empty catalogue contract failed: %d %s", empty.Code, empty.Body.String())
+	}
+
+	omitted := httptest.NewRecorder()
+	NewAPI(NewStore(), NewFPLSource("http://127.0.0.1:1"), nil, nil).Handler().ServeHTTP(omitted, httptest.NewRequest(http.MethodGet, "/api/v1/players", nil))
+	if omitted.Code != http.StatusOK || !strings.Contains(omitted.Body.String(), `seasonId was omitted`) || !strings.Contains(omitted.Body.String(), `"seasonId":1`) {
+		t.Fatalf("omitted season compatibility contract failed: %d %s", omitted.Code, omitted.Body.String())
+	}
+}
+
+func TestSyncPolicyRejectsHistoricalAndMismatchedSources(t *testing.T) {
+	current := NewFPLSourceWithSeason("http://127.0.0.1:1", 2026, "2026/27")
+	current.Kind = SourceOfficialCurrent
+	api := NewAPI(NewStore(), current, nil, nil)
+	if _, err := api.StartScopedSync(context.Background(), Scope{SeasonID: 2025, Dataset: "full"}, "test"); err == nil || err.(SyncPolicyError).Code != "HISTORICAL_SOURCE_UNAVAILABLE" {
+		t.Fatalf("expected mismatched historical season to be rejected, got %v", err)
+	}
+	historical := NewFPLSourceWithSeason("archive://local", 2025, "2025/26")
+	historical.Kind = SourceHistoricalArchive
+	api = NewAPI(NewStore(), historical, nil, nil)
+	if _, err := api.StartScopedSync(context.Background(), Scope{SeasonID: 2025, Dataset: "live"}, "test"); err == nil || err.(SyncPolicyError).Code != "HISTORICAL_LIVE_SYNC_FORBIDDEN" {
+		t.Fatalf("expected historical live refresh to be rejected, got %v", err)
 	}
 }
 

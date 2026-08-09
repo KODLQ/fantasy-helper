@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -36,6 +37,13 @@ type SyncMetrics struct {
 	Failed    uint64 `json:"failed"`
 	Cancelled uint64 `json:"cancelled"`
 }
+
+type SyncPolicyError struct {
+	Code    string
+	Message string
+}
+
+func (e SyncPolicyError) Error() string { return e.Message }
 
 func NewAPI(store *Store, source *FPLSource, dbHealthy func(context.Context) bool, logger *slog.Logger, repositories ...Repository) *API {
 	var repository Repository
@@ -120,6 +128,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/sync/status", a.syncStatus)
 	mux.HandleFunc("/api/v1/sync/runs/", a.syncRun)
 	mux.HandleFunc("/api/v1/data/snapshots", a.dataSnapshots)
+	mux.HandleFunc("/api/v1/seasons", a.seasons)
 	mux.HandleFunc("/api/v1/sync", a.sync)
 	mux.HandleFunc("/api/v1/players", a.players)
 	mux.HandleFunc("/api/v1/players/", a.players)
@@ -146,6 +155,10 @@ func (a *API) playerAnalysis(w http.ResponseWriter, r *http.Request) {
 	snapshotID := query.Get("snapshotId")
 	if playerID <= 0 || scope.SeasonID <= 0 || (scope.Gameweek <= 0 && snapshotID == "") {
 		writeError(w, http.StatusBadRequest, "historical_scope_required", "Player, seasonId, and gameweek or snapshotId are required.", nil)
+		return
+	}
+	if _, _, err := a.resolveSeason(r.Context(), scope.SeasonID); err != nil {
+		writeSeasonResolutionError(w, w.Header().Get("X-Request-ID"), err)
 		return
 	}
 	item, found, err := repository.LoadPlayerAnalysis(r.Context(), scope.SeasonID, scope.Gameweek, snapshotID, playerID)
@@ -193,6 +206,9 @@ func writeError(w http.ResponseWriter, status int, code, message string, details
 func writeEnvelope(w http.ResponseWriter, status int, requestID string, scope Scope, freshness Freshness, data interface{}) {
 	writeJSON(w, status, map[string]interface{}{"data": data, "meta": ResponseMeta{RequestID: requestID, Scope: scope, Freshness: freshness}})
 }
+func writeEnvelopeWithWarnings(w http.ResponseWriter, status int, requestID string, scope Scope, freshness Freshness, warnings []string, data interface{}) {
+	writeJSON(w, status, map[string]interface{}{"data": data, "meta": ResponseMeta{RequestID: requestID, Scope: scope, Freshness: freshness, Warnings: warnings}})
+}
 func writeContractError(w http.ResponseWriter, status int, requestID, code, message string, retryable bool, details interface{}) {
 	writeJSON(w, status, map[string]interface{}{"error": ResponseError{Code: code, Message: message, Retryable: retryable, Details: details}, "meta": ResponseMeta{RequestID: requestID}})
 }
@@ -212,6 +228,93 @@ func parseInt(value string, fallback int) int {
 	return n
 }
 func parseFloatParam(value string) float64 { n, _ := strconv.ParseFloat(value, 64); return n }
+
+type seasonResolutionError struct {
+	Status  int
+	Code    string
+	Message string
+}
+
+func (e seasonResolutionError) Error() string { return e.Message }
+
+func (a *API) seasonCatalogue(ctx context.Context) ([]SeasonCatalogueItem, error) {
+	if repository, ok := a.Repository.(SeasonCatalogueRepository); ok {
+		return repository.ListSeasons(ctx)
+	}
+	season, gameweek, snapshotAt := a.Store.Snapshot()
+	if season.ID == 0 {
+		return []SeasonCatalogueItem{}, nil
+	}
+	state := SeasonHistorical
+	if season.IsCurrent {
+		state = SeasonCurrent
+	}
+	weeks := []Gameweek{}
+	if gameweek.ID != 0 {
+		weeks = append(weeks, gameweek)
+	}
+	item := SeasonCatalogueItem{ID: season.ID, Name: season.Name, State: state, AvailableGameweeks: weeks, SourceKind: season.SourceKind, LastImportedAt: snapshotAt, Freshness: a.Store.Freshness(), Completeness: map[string]interface{}{"catalogue": true}, MissingInputs: []string{}, Warnings: []string{}}
+	if item.SourceKind == "" {
+		item.SourceKind = SourceRetainedSnapshot
+	}
+	item.DefaultGameweek = DefaultGameweek(state, weeks)
+	return []SeasonCatalogueItem{item}, nil
+}
+
+func (a *API) resolveSeason(ctx context.Context, requested int) (SeasonCatalogueItem, []string, error) {
+	items, err := a.seasonCatalogue(ctx)
+	if err != nil {
+		return SeasonCatalogueItem{}, nil, seasonResolutionError{Status: http.StatusServiceUnavailable, Code: "SEASON_DATA_UNAVAILABLE", Message: "Season catalogue is temporarily unavailable."}
+	}
+	if requested > 0 {
+		for _, item := range items {
+			if item.ID == requested {
+				if slices.Contains(item.MissingInputs, "catalogue") {
+					return SeasonCatalogueItem{}, nil, seasonResolutionError{Status: http.StatusConflict, Code: "SEASON_DATA_UNAVAILABLE", Message: "The requested season is known, but its queryable catalogue is unavailable."}
+				}
+				return item, nil, nil
+			}
+		}
+		return SeasonCatalogueItem{}, nil, seasonResolutionError{Status: http.StatusNotFound, Code: "SEASON_NOT_FOUND", Message: "The requested season is not available."}
+	}
+	item, found := DefaultSeason(items)
+	if !found {
+		return SeasonCatalogueItem{}, nil, seasonResolutionError{Status: http.StatusConflict, Code: "SEASON_DATA_UNAVAILABLE", Message: "No queryable FPL season is available."}
+	}
+	return item, []string{"seasonId was omitted and resolved to the default season; explicit seasonId will be required by a future API version"}, nil
+}
+
+func writeSeasonResolutionError(w http.ResponseWriter, requestID string, err error) {
+	resolved, ok := err.(seasonResolutionError)
+	if !ok {
+		writeContractError(w, http.StatusInternalServerError, requestID, "season_resolution_failed", "Season scope could not be resolved.", true, nil)
+		return
+	}
+	writeContractError(w, resolved.Status, requestID, resolved.Code, resolved.Message, false, nil)
+}
+
+func (a *API) seasons(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeContractError(w, http.StatusMethodNotAllowed, w.Header().Get("X-Request-ID"), "method_not_allowed", "Use GET for seasons.", false, nil)
+		return
+	}
+	items, err := a.seasonCatalogue(r.Context())
+	if err != nil {
+		writeContractError(w, http.StatusServiceUnavailable, w.Header().Get("X-Request-ID"), "season_catalogue_unavailable", "Season catalogue is temporarily unavailable.", true, nil)
+		return
+	}
+	if items == nil {
+		items = []SeasonCatalogueItem{}
+	}
+	freshness := Freshness{Dataset: "season-catalogue", State: "actual", Status: "fresh"}
+	warnings := []string{}
+	if len(items) == 0 {
+		freshness.State = "unavailable"
+		freshness.Status = "unavailable"
+		warnings = append(warnings, "No queryable season has been imported.")
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"data": map[string]interface{}{"items": items}, "meta": ResponseMeta{RequestID: w.Header().Get("X-Request-ID"), Freshness: freshness, Pagination: &Pagination{Limit: len(items), Returned: len(items), Total: len(items)}, Warnings: warnings}})
+}
 func (a *API) health(w http.ResponseWriter, r *http.Request) {
 	dbOK := true
 	if a.DBHealthy != nil {
@@ -329,7 +432,11 @@ func (a *API) sync(w http.ResponseWriter, r *http.Request) {
 	scope := Scope{SeasonID: request.SeasonID, Gameweek: request.Gameweek, Dataset: request.Scope}
 	running, err := a.StartScopedSync(r.Context(), scope, w.Header().Get("X-Request-ID"))
 	if err != nil {
-		writeError(w, http.StatusConflict, "sync_scope_unavailable", "An equivalent sync scope is already running or could not be started.", nil)
+		if policy, ok := err.(SyncPolicyError); ok {
+			writeContractError(w, http.StatusConflict, w.Header().Get("X-Request-ID"), policy.Code, policy.Message, false, nil)
+			return
+		}
+		writeContractError(w, http.StatusConflict, w.Header().Get("X-Request-ID"), "sync_scope_unavailable", "An equivalent sync scope is already running or could not be started.", true, nil)
 		return
 	}
 	writeEnvelope(w, http.StatusAccepted, w.Header().Get("X-Request-ID"), scope, a.Store.Freshness(), running)
@@ -338,10 +445,22 @@ func (a *API) sync(w http.ResponseWriter, r *http.Request) {
 func (a *API) StartScopedSync(ctx context.Context, scope Scope, correlationID string) (SyncStatus, error) {
 	a.startMu.Lock()
 	defer a.startMu.Unlock()
+	if a.Source == nil {
+		return SyncStatus{}, SyncPolicyError{Code: "SOURCE_UNAVAILABLE", Message: "No FPL source profile is configured."}
+	}
+	if scope.SeasonID > 0 && a.Source.SeasonID > 0 && scope.SeasonID != a.Source.SeasonID {
+		return SyncStatus{}, SyncPolicyError{Code: "HISTORICAL_SOURCE_UNAVAILABLE", Message: "Historical seasons require a deliberate retained-snapshot or archive import."}
+	}
+	if a.Source.Kind != "" && a.Source.Kind != SourceOfficialCurrent {
+		return SyncStatus{}, SyncPolicyError{Code: "HISTORICAL_LIVE_SYNC_FORBIDDEN", Message: "Scheduled and live synchronization are not allowed for historical source profiles."}
+	}
 	if a.Store.SyncStatus().Status == "running" {
 		return SyncStatus{}, fmt.Errorf("sync already running")
 	}
 	started := time.Now().UTC()
+	if scope.SeasonID == 0 && a.Source.SeasonID > 0 {
+		scope.SeasonID = a.Source.SeasonID
+	}
 	running := SyncStatus{Status: "running", Scope: scope, CurrentStage: "catalog", CorrelationID: correlationID, StartedAt: started, CompletedStages: []string{}, FailedStages: []string{}, Freshness: a.Store.Freshness()}
 	if syncRepository, ok := a.Repository.(SyncWorkRepository); ok {
 		runID, err := syncRepository.StartSyncRun(ctx, scope, correlationID)
@@ -735,6 +854,11 @@ func (a *API) players(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Use GET for players.", nil)
 		return
 	}
+	season, warnings, err := a.resolveSeason(r.Context(), parseInt(r.URL.Query().Get("seasonId"), 0))
+	if err != nil {
+		writeSeasonResolutionError(w, w.Header().Get("X-Request-ID"), err)
+		return
+	}
 	path := strings.TrimPrefix(r.URL.Path, "/api/v1/players")
 	if path != "" && path != "/" {
 		id := parseInt(strings.Trim(path, "/"), 0)
@@ -742,11 +866,11 @@ func (a *API) players(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "player_not_found", "Player not found.", nil)
 			return
 		}
-		a.playerDetail(w, r, id)
+		a.playerDetail(w, r, season.ID, id, warnings)
 		return
 	}
 	q := r.URL.Query()
-	query := PlayerQuery{Search: q.Get("search"), Position: parseInt(q.Get("position"), 0), TeamID: parseInt(q.Get("teamId"), 0), MinPrice: parseFloatParam(q.Get("minPrice")), MaxPrice: parseFloatParam(q.Get("maxPrice")), MinMinutes: parseInt(q.Get("minMinutes"), 0), MinForm: parseFloatParam(q.Get("minForm")), MinPoints: parseInt(q.Get("minPoints"), 0), MinValue: parseFloatParam(q.Get("minValue")), Status: q.Get("status"), Sort: q.Get("sort"), Desc: q.Get("direction") != "asc", Page: parseInt(q.Get("page"), 1), PageSize: parseInt(q.Get("pageSize"), 25)}
+	query := PlayerQuery{SeasonID: season.ID, Search: q.Get("search"), Position: parseInt(q.Get("position"), 0), TeamID: parseInt(q.Get("teamId"), 0), MinPrice: parseFloatParam(q.Get("minPrice")), MaxPrice: parseFloatParam(q.Get("maxPrice")), MinMinutes: parseInt(q.Get("minMinutes"), 0), MinForm: parseFloatParam(q.Get("minForm")), MinPoints: parseInt(q.Get("minPoints"), 0), MinValue: parseFloatParam(q.Get("minValue")), Status: q.Get("status"), Sort: q.Get("sort"), Desc: q.Get("direction") != "asc", Page: parseInt(q.Get("page"), 1), PageSize: parseInt(q.Get("pageSize"), 25)}
 	var results []Player
 	var total int
 	if researchRepository, ok := a.Repository.(ResearchReadRepository); ok {
@@ -759,12 +883,14 @@ func (a *API) players(w http.ResponseWriter, r *http.Request) {
 	} else {
 		results, total = a.Store.SearchPlayers(query)
 	}
-	freshness := a.requestFreshness(r.Context(), Scope{Dataset: "public-fpl"})
-	writeEnvelope(w, http.StatusOK, w.Header().Get("X-Request-ID"), Scope{Dataset: "public-fpl"}, freshness, map[string]interface{}{"items": results, "total": total, "page": query.Page, "pageSize": query.PageSize, "freshness": freshness})
+	scope := Scope{SeasonID: season.ID, Dataset: "public-fpl"}
+	freshness := a.requestFreshness(r.Context(), scope)
+	writeEnvelopeWithWarnings(w, http.StatusOK, w.Header().Get("X-Request-ID"), scope, freshness, warnings, map[string]interface{}{"items": results, "total": total, "page": query.Page, "pageSize": query.PageSize, "freshness": freshness})
 }
-func (a *API) playerDetail(w http.ResponseWriter, r *http.Request, id int) {
+func (a *API) playerDetail(w http.ResponseWriter, r *http.Request, seasonID, id int, warnings []string) {
+	scope := Scope{SeasonID: seasonID, Dataset: "public-fpl"}
 	if researchRepository, ok := a.Repository.(ResearchReadRepository); ok {
-		detail, found, err := researchRepository.LoadPlayerDetail(r.Context(), id)
+		detail, found, err := researchRepository.LoadPlayerDetail(r.Context(), seasonID, id)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "player_unavailable", "Player research is temporarily unavailable.", nil)
 			return
@@ -773,8 +899,8 @@ func (a *API) playerDetail(w http.ResponseWriter, r *http.Request, id int) {
 			writeError(w, http.StatusNotFound, "player_not_found", "Player not found in the active season.", nil)
 			return
 		}
-		detail.Freshness = a.requestFreshness(r.Context(), Scope{Dataset: "public-fpl"})
-		writeEnvelope(w, http.StatusOK, w.Header().Get("X-Request-ID"), Scope{Dataset: "public-fpl"}, detail.Freshness, detail)
+		detail.Freshness = a.requestFreshness(r.Context(), scope)
+		writeEnvelopeWithWarnings(w, http.StatusOK, w.Header().Get("X-Request-ID"), scope, detail.Freshness, warnings, detail)
 		return
 	}
 	player, ok := a.Store.Player(id)
@@ -784,9 +910,14 @@ func (a *API) playerDetail(w http.ResponseWriter, r *http.Request, id int) {
 	}
 	team, _ := a.Store.Team(player.TeamID)
 	freshness := a.Store.Freshness()
-	writeEnvelope(w, http.StatusOK, w.Header().Get("X-Request-ID"), Scope{Dataset: "public-fpl"}, freshness, map[string]interface{}{"player": player, "team": team, "history": a.Store.History(id), "fixtures": a.Store.UpcomingFixtures(player.TeamID), "freshness": freshness})
+	writeEnvelopeWithWarnings(w, http.StatusOK, w.Header().Get("X-Request-ID"), scope, freshness, warnings, map[string]interface{}{"player": player, "team": team, "history": a.Store.History(id), "fixtures": a.Store.UpcomingFixtures(player.TeamID), "freshness": freshness})
 }
 func (a *API) compare(w http.ResponseWriter, r *http.Request) {
+	season, warnings, err := a.resolveSeason(r.Context(), parseInt(r.URL.Query().Get("seasonId"), 0))
+	if err != nil {
+		writeSeasonResolutionError(w, w.Header().Get("X-Request-ID"), err)
+		return
+	}
 	ids := strings.Split(r.URL.Query().Get("ids"), ",")
 	if len(ids) == 0 || len(ids) > 4 || ids[0] == "" {
 		writeError(w, http.StatusBadRequest, "comparison_limit", "Compare between one and four players.", nil)
@@ -796,7 +927,7 @@ func (a *API) compare(w http.ResponseWriter, r *http.Request) {
 	for _, raw := range ids {
 		id := parseInt(raw, 0)
 		if repository, ok := a.Repository.(ResearchReadRepository); ok {
-			detail, found, err := repository.LoadPlayerDetail(r.Context(), id)
+			detail, found, err := repository.LoadPlayerDetail(r.Context(), season.ID, id)
 			if err != nil {
 				writeError(w, http.StatusInternalServerError, "comparison_unavailable", "Player comparison is temporarily unavailable.", nil)
 				return
@@ -815,12 +946,18 @@ func (a *API) compare(w http.ResponseWriter, r *http.Request) {
 		}
 		items = append(items, map[string]interface{}{"player": player, "team": mustTeam(a.Store.Team(player.TeamID)), "history": a.Store.History(id)})
 	}
-	freshness := a.requestFreshness(r.Context(), Scope{Dataset: "public-fpl"})
-	writeEnvelope(w, http.StatusOK, w.Header().Get("X-Request-ID"), Scope{Dataset: "public-fpl"}, freshness, map[string]interface{}{"items": items, "freshness": freshness})
+	scope := Scope{SeasonID: season.ID, Dataset: "public-fpl"}
+	freshness := a.requestFreshness(r.Context(), scope)
+	writeEnvelopeWithWarnings(w, http.StatusOK, w.Header().Get("X-Request-ID"), scope, freshness, warnings, map[string]interface{}{"items": items, "freshness": freshness})
 }
 func mustTeam(team Team, ok bool) Team { return team }
 func (a *API) squad(w http.ResponseWriter, r *http.Request) {
-	domain, err := a.requestDomainStore(r.Context())
+	season, warnings, err := a.resolveSeason(r.Context(), parseInt(r.URL.Query().Get("seasonId"), 0))
+	if err != nil {
+		writeSeasonResolutionError(w, w.Header().Get("X-Request-ID"), err)
+		return
+	}
+	domain, err := a.requestDomainStore(r.Context(), season.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "planning_unavailable", "Squad planning data is temporarily unavailable.", nil)
 		return
@@ -829,8 +966,9 @@ func (a *API) squad(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		squad := domain.EnrichSquad(domain.GetSquad())
 		squad.Validation = domain.ValidatePlan(squad)
-		freshness := a.requestFreshness(r.Context(), Scope{Dataset: "public-fpl"})
-		writeEnvelope(w, http.StatusOK, w.Header().Get("X-Request-ID"), Scope{Dataset: "public-fpl"}, freshness, squad)
+		scope := Scope{SeasonID: season.ID, Dataset: "public-fpl"}
+		freshness := a.requestFreshness(r.Context(), scope)
+		writeEnvelopeWithWarnings(w, http.StatusOK, w.Header().Get("X-Request-ID"), scope, freshness, warnings, squad)
 	case http.MethodPut:
 		var input Squad
 		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
@@ -845,14 +983,21 @@ func (a *API) squad(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if a.Repository != nil {
-			if err := a.Repository.SaveSquad(r.Context(), input); err != nil {
+			var saveErr error
+			if repository, ok := a.Repository.(SeasonSquadRepository); ok {
+				saveErr = repository.SaveSquadForSeason(r.Context(), season.ID, input)
+			} else {
+				saveErr = a.Repository.SaveSquad(r.Context(), input)
+			}
+			if saveErr != nil {
 				writeError(w, http.StatusInternalServerError, "persistence_failed", "Squad could not be saved to the database.", nil)
 				return
 			}
 		}
 		a.Store.SaveSquad(input)
-		freshness := a.requestFreshness(r.Context(), Scope{Dataset: "public-fpl"})
-		writeEnvelope(w, http.StatusOK, w.Header().Get("X-Request-ID"), Scope{Dataset: "public-fpl"}, freshness, domain.EnrichSquad(input))
+		scope := Scope{SeasonID: season.ID, Dataset: "public-fpl"}
+		freshness := a.requestFreshness(r.Context(), scope)
+		writeEnvelopeWithWarnings(w, http.StatusOK, w.Header().Get("X-Request-ID"), scope, freshness, warnings, domain.EnrichSquad(input))
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Use GET or PUT for the squad.", nil)
 	}
@@ -868,7 +1013,12 @@ func (a *API) recommendations(w http.ResponseWriter, r *http.Request) {
 	if r.Body != nil {
 		_ = json.NewDecoder(r.Body).Decode(&body)
 	}
-	domain, err := a.requestDomainStore(r.Context())
+	season, warnings, err := a.resolveSeason(r.Context(), parseInt(r.URL.Query().Get("seasonId"), 0))
+	if err != nil {
+		writeSeasonResolutionError(w, w.Header().Get("X-Request-ID"), err)
+		return
+	}
+	domain, err := a.requestDomainStore(r.Context(), season.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "recommendation_unavailable", "Recommendation data is temporarily unavailable.", nil)
 		return
@@ -878,15 +1028,23 @@ func (a *API) recommendations(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, "recommendation_failed", "Recommendation could not be generated.", errors)
 		return
 	}
-	freshness := a.requestFreshness(r.Context(), Scope{Dataset: "public-fpl"})
-	writeEnvelope(w, http.StatusOK, w.Header().Get("X-Request-ID"), Scope{Dataset: "public-fpl"}, freshness, map[string]interface{}{"recommendation": recommendation, "freshness": freshness})
+	scope := Scope{SeasonID: season.ID, Dataset: "public-fpl"}
+	freshness := a.requestFreshness(r.Context(), scope)
+	writeEnvelopeWithWarnings(w, http.StatusOK, w.Header().Get("X-Request-ID"), scope, freshness, warnings, map[string]interface{}{"recommendation": recommendation, "freshness": freshness})
 }
 
-func (a *API) requestDomainStore(ctx context.Context) (*Store, error) {
+func (a *API) requestDomainStore(ctx context.Context, seasonID int) (*Store, error) {
 	if a.Repository == nil {
 		return a.Store, nil
 	}
-	snapshot, found, err := a.Repository.LoadSnapshot(ctx)
+	var snapshot Snapshot
+	var found bool
+	var err error
+	if repository, ok := a.Repository.(SeasonCatalogueRepository); ok {
+		snapshot, found, err = repository.LoadSnapshotForSeason(ctx, seasonID)
+	} else {
+		snapshot, found, err = a.Repository.LoadSnapshot(ctx)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -895,7 +1053,13 @@ func (a *API) requestDomainStore(ctx context.Context) (*Store, error) {
 	}
 	domain := NewWarehouseCache()
 	domain.ApplySnapshot(snapshot.Season, snapshot.Gameweeks, snapshot.Teams, snapshot.Players, snapshot.Fixtures, snapshot.Histories)
-	if squad, found, err := a.Repository.LoadSquad(ctx); err != nil {
+	var squad Squad
+	if repository, ok := a.Repository.(SeasonSquadRepository); ok {
+		squad, found, err = repository.LoadSquadForSeason(ctx, seasonID)
+	} else {
+		squad, found, err = a.Repository.LoadSquad(ctx)
+	}
+	if err != nil {
 		return nil, err
 	} else if found {
 		domain.SaveSquad(squad)
