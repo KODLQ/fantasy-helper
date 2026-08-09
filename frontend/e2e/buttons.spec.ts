@@ -23,10 +23,10 @@ test.describe('application buttons', () => {
     await page.route('**/api/v1/sync', (route) => route.fulfill({
       status: 202,
       contentType: 'application/json',
-      body: JSON.stringify({ status: 'running' }),
+      body: JSON.stringify({ status: 'running', currentStage: 'catalog', freshness: { status: 'unavailable', state: 'unavailable' } }),
     }));
     await page.getByRole('button', { name: 'Sync official data' }).click();
-    await expect(page.getByText('Sync started. Refresh the status after a moment.')).toBeVisible();
+    await expect(page.getByText('Official data sync started.')).toBeVisible();
   });
 
   test('research view, filter, card, and pagination buttons work', async ({ page }) => {

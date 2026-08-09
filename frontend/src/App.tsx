@@ -1,12 +1,13 @@
 import { useState } from 'react';
-import { api } from './api';
-import { useFreshness } from './hooks/useFreshness';
+import { api, SyncStatus } from './api';
 import { Compare } from './features/compare';
 import { PlayerDrawer } from './features/player-drawer';
 import { Recommendations } from './features/recommendations';
 import { Research } from './features/research';
 import { SquadPlanner } from './features/squad';
+import { SyncControl } from './features/sync-control';
 import './interactive.css';
+import './sync-control.css';
 
 type View = 'research' | 'compare' | 'squad' | 'recommendations';
 const demoIDs = [1, 2, 4, 5, 6, 7, 22, 8, 9, 10, 11, 12, 13, 14, 15];
@@ -15,10 +16,13 @@ const demoBench = [2, 7, 12, 22];
 
 function App() {
   const [view, setView] = useState<View>('research');
-  const freshness = useFreshness();
+  const [freshness, setFreshness] = useState<SyncStatus>({ status: 'empty', freshness: { status: 'unavailable', state: 'unavailable' } });
   const [compareIDs, setCompareIDs] = useState<number[]>([]);
   const [selectedID, setSelectedID] = useState<number | null>(null);
   const [notice, setNotice] = useState('');
+
+  const freshnessState = freshness.freshness?.state ?? freshness.freshness?.status ?? freshness.status;
+  const freshnessTitle = freshness.status === 'offline' ? 'Backend connection unavailable' : freshnessState === 'partial' ? 'Some warehouse inputs are missing' : freshnessState === 'stale' ? 'Warehouse data is stale' : freshnessState === 'unavailable' || freshness.status === 'empty' ? 'Demo snapshot is active' : 'Warehouse data needs attention';
 
   const addCompare = (id: number) => { if (compareIDs.includes(id)) return; if (compareIDs.length >= 4) { setNotice('Comparison is limited to four players.'); return; } setCompareIDs([...compareIDs, id]); setNotice(''); };
   const removeCompare = (id: number) => setCompareIDs(compareIDs.filter((current) => current !== id));
@@ -29,11 +33,11 @@ function App() {
       <div className="brand"><div className="brand-mark">FH</div><div><strong>Fantasy Helper</strong><span>Research desk</span></div></div>
       <div className="side-label">Workspace</div>
       <nav>{([['research', 'Research', '⌕'], ['compare', `Compare${compareIDs.length ? ` · ${compareIDs.length}` : ''}`, '◫'], ['squad', 'Squad planner', '♙'], ['recommendations', 'Recommendations', '✦']] as [View, string, string][]).map(([key, label, icon]) => <button key={key} className={view === key ? 'nav-item active' : 'nav-item'} onClick={() => setView(key)}><span>{icon}</span>{label}</button>)}</nav>
-      <div className="sidebar-footer"><div className="mini-status"><span className={`status-dot ${freshness.status === 'fresh' ? 'fresh' : ''}`} />{freshness.status === 'unavailable' ? 'Demo snapshot' : freshness.status}</div><button className="text-button" onClick={() => api.sync().then(() => setNotice('Sync started. Refresh the status after a moment.')).catch(() => setNotice('Could not start sync.'))}>↻ Sync official data</button></div>
+      <div className="sidebar-footer"><SyncControl onNotice={setNotice} onStatus={setFreshness} /></div>
     </aside>
     <main className="main-content">
       <header className="topbar"><div><span className="eyebrow">FPL / 2025—26</span><h1>{view === 'research' ? 'Player research' : view === 'compare' ? 'Compare players' : view === 'squad' ? 'Squad planner' : 'Recommendations'}</h1></div><div className="topbar-actions"><div className="week-chip">GW 1 <span>·</span> decision window</div><div className="avatar">OS</div></div></header>
-      {freshness.status !== 'fresh' && <div className="freshness-banner" data-testid="freshness-banner"><span className="banner-icon">!</span><div><strong>{freshness.status === 'offline' ? 'Backend connection unavailable' : 'Demo snapshot is active'}</strong><span>{freshness.warning ?? 'Sync official data to replace the sample research snapshot with the latest FPL data.'}</span></div></div>}
+      {freshnessState !== 'actual' && freshnessState !== 'fresh' && <div className="freshness-banner" data-testid="freshness-banner"><span className="banner-icon">!</span><div><strong>{freshnessTitle}</strong><span>{freshness.warning ?? freshness.freshness?.warning ?? 'Sync official data to replace the sample research snapshot with the latest FPL data.'}</span></div></div>}
       {notice && <div className="toast" onClick={() => setNotice('')}>{notice}<span>×</span></div>}
       {view === 'research' && <Research onSelect={setSelectedID} onCompare={addCompare} onSquad={loadDemoSquad} />}
       {view === 'compare' && <Compare ids={compareIDs} onRemove={removeCompare} onBack={() => setView('research')} />}

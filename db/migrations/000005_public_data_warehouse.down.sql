@@ -1,0 +1,11 @@
+DROP TABLE IF EXISTS player_future_fixtures;
+DROP TABLE IF EXISTS fixture_stats;
+DROP TABLE IF EXISTS player_gameweek_facts;
+DROP TABLE IF EXISTS player_snapshots;
+DROP TABLE IF EXISTS season_source_identities;
+DROP TABLE IF EXISTS element_types;
+DROP TABLE IF EXISTS game_settings;
+DROP TABLE IF EXISTS season_phases;
+DROP TABLE IF EXISTS sync_work_items;
+DROP TABLE IF EXISTS source_payloads;
+DROP TABLE IF EXISTS dataset_snapshots;

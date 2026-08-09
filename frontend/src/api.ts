@@ -20,7 +20,8 @@ export type Player = {
   saves: number;
 };
 
-export type Freshness = { status: string; lastSuccessfulSync?: string; warning?: string; snapshotAt?: string };
+export type Freshness = { status: string; state?: string; lastSuccessfulSync?: string; warning?: string; warnings?: string[]; snapshotAt?: string };
+export type SyncStatus = { status: string; runId?: number; currentStage?: string; completedStages?: string[]; failedStages?: string[]; completedWork?: number; totalWork?: number; warning?: string; freshness: Freshness };
 export type ValidationError = { code: string; rule: string; message: string; current?: unknown; required?: unknown; playerId?: number };
 export type Squad = { name: string; budget: number; players: Player[]; purchasePrices: Record<number, number>; startingPlayerIds: number[]; benchPlayerIds: number[]; captainId: number; viceCaptainId: number; formation: string; totalCost: number; remainingBudget: number; validation: ValidationError[] };
 export type RecommendationPlayer = { player: Player; score: number; factors: { name: string; signal: number; weight: number; contribution: number }[]; fixture: string; explanation: string };
@@ -161,8 +162,9 @@ export const api = {
   squad: (signal?: AbortSignal) => request<Squad>('/api/v1/squad', { signal, operation: 'squad' }),
   saveSquad: (squad: Partial<Squad>) => request<Squad>('/api/v1/squad', { method: 'PUT', body: JSON.stringify(squad), operation: 'save-squad' }),
   recommend: (weights?: Record<string, number>) => request<{ recommendation: Recommendation; freshness: Freshness }>('/api/v1/recommendations', { method: 'POST', body: JSON.stringify({ weights }), operation: 'recommendation' }),
-  sync: () => request('/api/v1/sync', { method: 'POST', operation: 'sync' }),
-  syncStatus: () => request<{ status: string; warning?: string; freshness: Freshness }>('/api/v1/sync/status', { operation: 'sync-status', staleKey: 'sync-status' }),
+  sync: () => request<SyncStatus>('/api/v1/sync', { method: 'POST', operation: 'sync' }),
+  syncStatus: () => request<SyncStatus>('/api/v1/sync/status', { operation: 'sync-status', staleKey: 'sync-status' }),
+  retrySync: (runId: number) => request<SyncStatus>(`/api/v1/sync/runs/${runId}/retry`, { method: 'POST', operation: 'sync-retry' }),
 };
 
 export const positionName = (position: number) => ({ 1: 'GK', 2: 'DEF', 3: 'MID', 4: 'FWD' }[position] ?? '—');

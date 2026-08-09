@@ -6,7 +6,7 @@ Fantasy Helper is a local FPL research desk for comparing players, planning a 15
 
 Prerequisite: Docker Desktop (or Docker Engine with Compose v2).
 
-The repository is designed around three containers: `db`, `backend`, and `frontend`. Plain `docker compose up` starts the local hot-refresh stack. The Makefile provides the explicit environment commands:
+The repository uses four Compose services: `db`, `migrate`, `backend`, and `frontend`. The migration service completes before the backend becomes ready. Plain `docker compose up` starts the local hot-refresh stack. The Makefile provides the explicit environment commands:
 
 ```sh
 # local development with Vite HMR and backend source watching
@@ -27,13 +27,18 @@ make down ENV=local
 
 Use `make logs ENV=local` to follow service output and `make config ENV=local` to inspect the resolved Compose configuration. Local opens at [http://localhost:5173](http://localhost:5173); dev at [http://localhost:5174](http://localhost:5174); prod at [http://localhost:8080](http://localhost:8080). The environment files under `deploy/env/` keep the database volumes, ports, and API URL separate. Replace the production password in `deploy/env/prod.env` before a real deployment.
 
-The application starts with a small deterministic demo snapshot so the workspace is useful before the first official sync. Use “Sync official data” to import the configured FPL endpoints.
+Production starts from persisted PostgreSQL warehouse data and reports unavailable freshness until the first official sync; deterministic demo data is confined to unit and browser fixtures. Use “Sync official data” to import the configured FPL endpoints. Set `FPL_SOURCE_SEASON_ID` and `FPL_SOURCE_SEASON_NAME` together for an explicit season; discovery mode is supported when the upstream bootstrap payload includes season metadata. Transport behavior is controlled with `FPL_SOURCE_TIMEOUT`, `FPL_SOURCE_RETRIES`, `FPL_SOURCE_RETRY_JITTER`, and `FPL_SOURCE_MAX_CONCURRENT`; retryable responses use exponential backoff, honor `Retry-After`, and expose redacted counters through the source adapter metrics.
+
+Scheduled synchronization is disabled by default until an initial manual sync has been verified. Enable it with `SYNC_SCHEDULER_ENABLED=true`. Catalog and fixtures default to hourly refreshes, live gameweeks to five-minute refreshes, post-match finalization to fifteen-minute confirmation refreshes, and historical reconciliation to daily runs. Configure these with `SYNC_CATALOG_CADENCE`, `SYNC_FIXTURE_CADENCE`, `SYNC_LIVE_CADENCE`, `SYNC_FINALIZATION_CADENCE`, and `SYNC_RECONCILE_CADENCE`; `SYNC_SCHEDULER_TICK` controls how often due policies are evaluated. Scope locking prevents the scheduler from overlapping an active manual or scheduled run.
+
+Raw-body retention is also opt-in with `RETENTION_CLEANUP_ENABLED=true`. Baseline bodies default to 90 days (`RAW_PAYLOAD_RETENTION=2160h`) and finalized live bodies to 30 days (`LIVE_PAYLOAD_RETENTION=720h`). Cleanup nulls eligible raw bodies but preserves source metadata and checksums, invalid diagnostics, snapshot-linked reproducibility inputs, and every canonical fact.
 
 ## API surface
 
 - `GET /healthz` — service, database-network, and data status.
 - `GET /api/v1/sync/status` — current/last sync state and freshness warning.
-- `POST /api/v1/sync` — start an asynchronous official data sync.
+- `POST /api/v1/sync` — start an asynchronous official data sync. The JSON body may provide `scope` (`catalog`, `fixtures`, `live`, `player-history`, or `full`), `seasonId`, and `gameweek`.
+- `GET /api/v1/data/snapshots` — common-envelope list of point-in-time warehouse datasets.
 - `GET /api/v1/players` — paginated search, filters, and deterministic sorting.
 - `GET /api/v1/players/:id` — normalized profile, history, and upcoming fixture context.
 - `GET /api/v1/players/compare?ids=1,2` — compare up to four players.
@@ -50,7 +55,7 @@ Upstream-shape fixtures for adapter tests live in `backend/testdata`. Keep them 
 
 ```sh
 cd backend && GOCACHE=/tmp/fantasy-helper-gocache go test ./...
-cd frontend && npm run build && npm test
+cd frontend && npm run verify
 
 # with the local stack already running
 sh scripts/smoke.sh

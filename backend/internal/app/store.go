@@ -22,12 +22,16 @@ type Store struct {
 }
 
 func NewStore() *Store {
-	s := &Store{
-		gameweeks: map[int]Gameweek{}, teams: map[int]Team{}, players: map[int]Player{}, history: map[int][]PlayerHistory{},
-		sync: SyncStatus{Status: "empty", CompletedStages: []string{}, FailedStages: []string{}, Freshness: Freshness{Status: "unavailable"}},
-	}
+	s := NewWarehouseCache()
 	s.seedDemoData()
 	return s
+}
+
+func NewWarehouseCache() *Store {
+	return &Store{
+		gameweeks: map[int]Gameweek{}, teams: map[int]Team{}, players: map[int]Player{}, history: map[int][]PlayerHistory{},
+		sync: SyncStatus{Status: "empty", CompletedStages: []string{}, FailedStages: []string{}, Freshness: Freshness{Status: "unavailable", State: "unavailable", Dataset: "public-fpl"}},
+	}
 }
 
 func (s *Store) seedDemoData() {
@@ -75,6 +79,17 @@ func (s *Store) Snapshot() (Season, Gameweek, time.Time) {
 	return s.season, s.gameweeks[1], s.lastSnapshot
 }
 
+func (s *Store) CurrentGameweek() Gameweek {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, gameweek := range s.gameweeks {
+		if gameweek.IsCurrent {
+			return gameweek
+		}
+	}
+	return Gameweek{}
+}
+
 func (s *Store) ApplySnapshot(season Season, weeks []Gameweek, teams []Team, players []Player, fixtures []Fixture, histories map[int][]PlayerHistory) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -83,7 +98,9 @@ func (s *Store) ApplySnapshot(season Season, weeks []Gameweek, teams []Team, pla
 	s.teams = map[int]Team{}
 	s.players = map[int]Player{}
 	s.fixtures = fixtures
-	s.history = histories
+	for playerID, rows := range histories {
+		s.history[playerID] = append([]PlayerHistory{}, rows...)
+	}
 	for _, w := range weeks {
 		s.gameweeks[w.ID] = w
 	}
