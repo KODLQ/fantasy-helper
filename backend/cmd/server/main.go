@@ -75,6 +75,8 @@ func main() {
 		logger.Info("local bootstrap user created")
 	}
 	api.EnableAuth(authService)
+	managerSource := app.NewManagerSource(cfg.FPLBaseURL, source.Client)
+	api.EnableManager(app.NewManagerService(repository, managerSource, app.NewMemorySessionProvider()))
 	api.SyncWorkers = cfg.SyncWorkers
 	schedulerCtx, stopScheduler := context.WithCancel(context.Background())
 	defer stopScheduler()

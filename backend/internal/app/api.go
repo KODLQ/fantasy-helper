@@ -22,6 +22,7 @@ type API struct {
 	Logger      *slog.Logger
 	Repository  Repository
 	Auth        *AuthService
+	Manager     *ManagerService
 	SyncWorkers int
 	startMu     sync.Mutex
 	syncMu      sync.Mutex
@@ -132,6 +133,13 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/auth/logout", a.authLogout)
 	mux.HandleFunc("/api/v1/auth/me", a.authMe)
 	mux.HandleFunc("/api/v1/auth/password", a.authPassword)
+	mux.HandleFunc("/api/v1/manager/status", a.managerStatus)
+	mux.HandleFunc("/api/v1/manager/scopes", a.managerScopes)
+	mux.HandleFunc("/api/v1/manager/connect", a.managerConnect)
+	mux.HandleFunc("/api/v1/manager/disconnect", a.managerDisconnect)
+	mux.HandleFunc("/api/v1/manager/sync", a.managerSync)
+	mux.HandleFunc("/api/v1/manager/export", a.managerExport)
+	mux.HandleFunc("/api/v1/manager/data", a.managerData)
 	mux.HandleFunc("/api/v1/sync/status", a.syncStatus)
 	mux.HandleFunc("/api/v1/sync/runs/", a.syncRun)
 	mux.HandleFunc("/api/v1/data/snapshots", a.dataSnapshots)
