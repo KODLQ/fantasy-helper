@@ -12,6 +12,7 @@ The public FPL warehouse will explain player and fixture performance, but it can
 - Synchronize configured league members' gameweek team selections so managers in the same league can be compared.
 - Add league team-comparison views showing shared players, differentials, captain/bench differences, formation, and actual/provisional/estimated point differences.
 - Add an optional authenticated session boundary for `/me/` and `/my-team/{team_id}/`, without persisting raw cookies in ordinary source payloads or logs.
+- Define the remote FPL session lifecycle, per-user connection ownership, reauthentication behavior, secret-storage boundary, retention, export/deletion, and privacy guarantees.
 - Store manager and league observations by season and gameweek so decisions can be compared with public player/gameweek facts.
 - Add idempotent snapshots, retryable/resumable jobs, pagination checkpoints, freshness, partial-failure, and permission-error reporting.
 - Add read APIs for manager history, picks, transfers, league standings, and decision-vs-outcome analysis.

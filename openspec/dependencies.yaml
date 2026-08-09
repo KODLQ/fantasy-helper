@@ -1,0 +1,101 @@
+version: 1
+
+ci:
+  command: ./scripts/validate-openspec-portfolio
+  checks:
+    - dependency-registry-schema
+    - unknown-change-references
+    - dependency-cycle-detection
+    - dependency-release-order
+    - one-authoritative-owner-per-capability
+    - no-parent-child-spec-duplicates
+    - openspec-validate-strict
+
+# Canonical delivery dependencies. A change may not enter implementation until
+# every change listed in `dependsOn` has passed its release gate.
+changes:
+  fpl-research-assistant-foundation:
+    owner: fpl-research-assistant-foundation
+    authoritativeCapabilities: [repository-runtime, common-api-foundation, browser-foundation]
+    dependsOn: []
+    reason: Base repository, runtime, API, database, and browser-test contracts.
+  technical-debt-foundation:
+    owner: technical-debt-foundation
+    authoritativeCapabilities: [frontend-maintainability, verification-operational-hygiene]
+    dependsOn:
+      - fpl-research-assistant-foundation
+    reason: Frontend and verification maintenance builds on the foundation only.
+  fpl-public-data-warehouse:
+    owner: fpl-public-data-warehouse
+    authoritativeCapabilities: [fpl-public-data-warehouse, common-response-contract, fpl-source-contract]
+    dependsOn:
+      - fpl-research-assistant-foundation
+    reason: Durable public source, snapshot, migration, and common-response contracts.
+  local-user-authentication:
+    owner: local-user-authentication
+    authoritativeCapabilities: [local-user-authentication, user-workspace-ownership]
+    dependsOn:
+      - fpl-research-assistant-foundation
+      - fpl-public-data-warehouse
+    reason: Auth uses the common response contract and protects warehouse-backed private workspaces.
+  fpl-manager-league-sync:
+    owner: fpl-manager-league-sync
+    authoritativeCapabilities: [fpl-manager-data-sync, fpl-league-data-sync, fpl-squad-import, league-team-comparison]
+    dependsOn:
+      - fpl-research-assistant-foundation
+      - fpl-public-data-warehouse
+      - local-user-authentication
+    reason: Manager and league facts require public identities plus authenticated user ownership.
+  fpl-analysis-workbench:
+    owner: fpl-analysis-workbench
+    authoritativeCapabilities: [analysis-workbench-roadmap]
+    dependsOn:
+      - fpl-public-data-warehouse
+      - local-user-authentication
+      - fpl-manager-league-sync
+    reason: Roadmap gates consume shared public, auth, manager, and league contracts.
+  fpl-league-gameweek-insights:
+    owner: fpl-league-gameweek-insights
+    authoritativeCapabilities: [league-intelligence, gameweek-autopsy]
+    dependsOn:
+      - fpl-analysis-workbench
+      - fpl-public-data-warehouse
+      - local-user-authentication
+      - fpl-manager-league-sync
+    reason: League and autopsy analysis consumes manager picks and public gameweek facts.
+  fpl-transfer-fixture-research:
+    owner: fpl-transfer-fixture-research
+    authoritativeCapabilities: [transfer-laboratory, fixture-differential-research]
+    dependsOn:
+      - fpl-analysis-workbench
+      - fpl-public-data-warehouse
+      - local-user-authentication
+      - fpl-manager-league-sync
+    reason: Transfer simulations require owned squad snapshots and historical public prices/fixtures.
+  fpl-recommendation-evaluation:
+    owner: fpl-recommendation-evaluation
+    authoritativeCapabilities: [recommendation-evaluation]
+    dependsOn:
+      - fpl-analysis-workbench
+      - fpl-public-data-warehouse
+      - local-user-authentication
+      - fpl-manager-league-sync
+    reason: Replay requires versioned public inputs, manager outcomes, and authenticated result ownership.
+  fpl-live-alerts-storyline:
+    owner: fpl-live-alerts-storyline
+    authoritativeCapabilities: [live-gameweek-center, analysis-alerts, season-storyline]
+    dependsOn:
+      - fpl-analysis-workbench
+      - fpl-public-data-warehouse
+      - local-user-authentication
+      - fpl-manager-league-sync
+    reason: Live and storyline views require current snapshots, manager history, and user-owned alerts.
+  fpl-optimal-team-learning:
+    owner: fpl-optimal-team-learning
+    authoritativeCapabilities: [optimal-team-learning]
+    dependsOn:
+      - fpl-analysis-workbench
+      - fpl-public-data-warehouse
+      - local-user-authentication
+      - fpl-manager-league-sync
+    reason: Retrospective optimization consumes the finalized shared analysis, warehouse, manager, and ownership contracts.

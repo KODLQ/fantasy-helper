@@ -15,12 +15,17 @@ The current FPL integration imports only a partial public snapshot into an in-me
 - Keep the existing research and recommendation APIs stable while sourcing their data from PostgreSQL.
 - Add explicit point-in-time dataset identities so every analytical response can name the season, gameweek, source snapshot, normalization version, and completeness state it used.
 - Add configuration for initial backfill, incremental refresh, live polling, raw-payload retention, worker concurrency, request timeout, retry policy, and rate-limit behavior.
+- Fold the migration, sync-lifecycle, batching, last-known-good, season-identity, and deployment-boundary debt items into this warehouse change so there is one implementation owner.
+- Define one response envelope and error contract for warehouse, manager, analysis, and optimization APIs.
+- Define the upstream FPL source contract explicitly, including endpoint shapes, required fields, season scope, normalization rules, and unknown-field handling.
 
 ## Capabilities
 
 ### New Capabilities
 
 - `fpl-public-data-warehouse`: Durable ingestion, normalization, historical retention, freshness reporting, and analytical read models for public FPL data.
+- `common-response-contract`: Versioned success, error, freshness, provenance, pagination, and partial-data response semantics shared by all API changes.
+- `fpl-source-contract`: Explicit source endpoint, field, typing, identity, and validation contract for the FPL public API.
 
 ### Modified Capabilities
 
@@ -33,4 +38,5 @@ The current FPL integration imports only a partial public snapshot into an in-me
 - Requires PostgreSQL to be the source of truth for synced data; the demo in-memory store becomes test-only or a fallback fixture store.
 - Adds worker/scheduler configuration, source request metrics, and migration/integration tests.
 - Defines stable dataset freshness and sync-status contracts consumed by the frontend and future analytical services.
+- Becomes the owner of migration execution, sync lifecycle correctness, batch persistence, explicit season configuration, and warehouse-facing deployment checks previously listed in `technical-debt-foundation`.
 - The manager, private-team, and league endpoints remain out of scope for this change and are handled separately.

@@ -1,16 +1,30 @@
 ## Why
 
-The foundation is functional, but persistence, synchronization, frontend state, and deployment currently rely on duplicated or implicit behavior. Those shortcuts will make future FPL seasons, larger snapshots, and new research features increasingly risky to ship.
+The application still has cross-cutting frontend and verification debt that would make the warehouse, authentication, manager, and analysis changes harder to operate safely.
+
+## Ownership boundary
+
+`fpl-public-data-warehouse` is the sole owner of migration execution, sync lifecycle, source checksums, season configuration, last-known-good retention, batch persistence, cache refresh, and warehouse deployment gates. `local-user-authentication` owns user/workspace ownership. This change intentionally contains no requirements or tasks for those domains.
 
 ## What Changes
 
-- Make versioned SQL migrations the sole database schema owner.
-- Give every synchronization a single persisted run with stage updates, source checksums, cancellation, and graceful shutdown.
-- Preserve last-known-good player history during partial refreshes and derive the active season from explicit source configuration.
-- Batch snapshot persistence and make PostgreSQL/cache ownership explicit.
-- Split the frontend by feature, harden API requests, and add formatting/linting guardrails.
-- Improve deployment migration checks, dependency pinning, generated-artifact hygiene, observability, and integration-test safety.
+- Split the frontend shell into feature modules and shared request hooks.
+- Harden frontend request parsing, timeout, cancellation, stale-response, and typed-error behavior.
+- Add formatting/linting/dependency guardrails and generated-artifact hygiene.
+- Protect integration tests from unsafe database targets and add frontend/deployment smoke checks.
+- Add correlation and verification coverage for the frontend boundary without duplicating warehouse synchronization requirements.
+
+## Capabilities
+
+### New Capabilities
+
+- `frontend-maintainability`: Feature-oriented frontend modules and a safe typed request boundary.
+- `verification-operational-hygiene`: Safe integration targets, generated-artifact handling, and cross-cutting checks.
+
+### Modified Capabilities
+
+- None. Warehouse and authentication changes own their respective backend concerns.
 
 ## Impact
 
-This is a behavior-preserving maintenance change. It affects database startup/migration flow, sync persistence, source configuration, repository performance, frontend module boundaries, developer tooling, and verification scripts. Existing API routes remain compatible unless they expose previously incorrect sync metadata.
+This is a behavior-preserving maintenance change affecting frontend structure, client request handling, developer tooling, and verification scripts. It does not create migrations, alter sync state, or own private-data authorization.

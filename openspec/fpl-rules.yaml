@@ -1,0 +1,39 @@
+version: 1
+owner: fpl-optimal-team-learning
+rulesetId: fpl-rules-v1
+
+# Season-specific source settings override defaults. No chip or substitution
+# behavior may be inferred when the season ruleset does not provide it.
+missingData:
+  requiredForCompleteExact:
+    - playerGameweekPoints
+    - playerPriceAtDeadline
+    - playerAvailability
+    - fixtureScheduleAndCompletion
+    - squadAndFormationRules
+    - transferAndHitRules
+    - chipRulesAndAvailability
+  requiredBehavior: "mark affected gameweek incomplete; never replace missing points/prices/rules with zero or current values"
+  optionalBehavior: "preserve null, exclude from derived denominator, report warning"
+
+normalization:
+  id: normalized-feature-v1
+  minMinutesForPointsPer90: 180
+  constantPeerSet: 0.5
+  missingFeature: "exclude candidate/denominator and report coverage"
+
+chips:
+  behavior: "Use season-source chip rules and availability at each deadline; unsupported or missing behavior blocks complete_exact."
+  tripleCaptain: "captain multiplier is the season rule's triple-captain multiplier for one gameweek"
+  benchBoost: "eligible bench players receive the season rule's scoring multiplier for one gameweek"
+  freeHit: "transfers apply for one gameweek and the pre-chip squad/bank/value state is restored according to the season ruleset"
+  wildcard: "unlimited transfers apply according to the season ruleset and become the permanent post-deadline squad state"
+  chipExclusivity: "the ruleset determines whether chips may overlap; optimizer rejects illegal combinations"
+
+autoSubstitution:
+  trigger: "after the gameweek, only when a starting player has zero minutes or the season ruleset says the player did not play"
+  selection: "first eligible bench player in stored bench order"
+  formation: "replacement must preserve a legal formation and positional constraints"
+  captain: "if captain did not play, vice-captain receives the season ruleset captain multiplier; otherwise no emergency captain substitution"
+  benchBoost: "do not apply normal bench exclusion when the active chip ruleset scores the bench"
+  unresolved: "if minutes/substitution eligibility is missing, affected result is provisional/incomplete"

@@ -101,20 +101,25 @@ New warehouse-facing contracts use `/api/v1/data` and `/api/v1/sync`:
 - `POST /api/v1/sync` accepts an explicit scope (`catalog`, `fixtures`, `live`, `player-history`, or `full`) plus season/gameweek filters and returns a run ID.
 - `POST /api/v1/sync/runs/{id}/retry` retries only retryable failed work items.
 
-Every analytical response has a common `freshness` object:
+Every analytical response places the common `freshness` object under `meta`:
 
 ```json
 {
-  "dataset": "player-gameweek",
-  "seasonId": 1,
-  "gameweek": 12,
-  "snapshotId": "snapshot-...",
-  "state": "actual|provisional|estimated|partial|stale|unavailable",
-  "sourceFetchedAt": "...",
-  "normalizedAt": "...",
-  "normalizerVersion": "...",
-  "missingInputs": [],
-  "warning": ""
+  "data": {},
+  "meta": {
+    "requestId": "...",
+    "scope": {"seasonId": 1, "gameweek": 12},
+    "freshness": {
+      "dataset": "player-gameweek",
+      "snapshotIds": ["snapshot-..."],
+      "state": "actual|provisional|estimated|partial|stale|unavailable",
+      "sourceFetchedAt": "...",
+      "normalizedAt": "...",
+      "normalizerVersion": "...",
+      "missingInputs": [],
+      "warnings": []
+    }
+  }
 }
 ```
 
@@ -123,6 +128,36 @@ Every analytical response has a common `freshness` object:
 Canonical facts are retained for all imported seasons. Raw payloads are retained for successful baseline responses and failed/invalid responses; high-frequency live observations can use configurable retention after their normalized facts are finalized. Checksums and metadata remain retained even if a raw body is purged.
 
 Raw payload retention must be enforced by a scheduled cleanup job that never deletes canonical facts, failed diagnostics needed for the configured audit window, or payloads referenced by an active reproducibility run.
+
+### 8. Make the warehouse source contract explicit
+
+The adapter is a typed boundary around the public FPL source. The supported endpoint families are:
+
+| Endpoint | Required source scope | Canonical responsibilities |
+| --- | --- | --- |
+| `bootstrap-static/` | active season catalog | gameweeks/events, phases, game settings, teams, players/elements, element types, total players |
+| `fixtures/` and `fixtures/?event={gw}` | season and optional gameweek | fixture ID, event, kickoff, home/away teams, scores, finished/provisional state, fixture stats |
+| `event/{gw}/live/` | season and gameweek | player ID plus live/final minutes, points, scoring, defensive, saves, cards, bonus/BPS, and source-provided expected metrics |
+| `element-summary/{playerId}/` | season and player | future fixtures, gameweek history, and prior-season totals/history |
+
+The adapter SHALL preserve the source payload before normalization and SHALL map source IDs with explicit season scope. Numeric strings are parsed into typed values with field-level validation; missing nullable values remain null rather than being converted to zero. Unknown fields remain in raw JSON and are exposed in diagnostics when a required field is absent or changes type. A source fixture may only be normalized as `actual` after its required identity, schedule, score state, and player-stat fields pass validation.
+
+The source contract also defines configuration rather than assuming the current season: `sourceSeasonId`, `sourceSeasonName`, source base URL, request timeout, retry policy, and endpoint cadence are required inputs. The adapter must fail clearly when the configured season identity cannot be reconciled with the bootstrap response.
+
+### 9. Fold technical-debt ownership into the warehouse
+
+This change owns the following implementation boundaries:
+
+- Migration files under `db/migrations` are the sole schema authority. Application startup verifies connectivity and schema state but does not embed DDL or invent migration versions. Deployment applies migrations and fails readiness before serving traffic when one fails; verification derives expected versions from migration files.
+- A `syncCoordinator` owns one run, cancellation context, duplicate-scope lock, bounded worker pool, retry/backoff, and graceful shutdown. Repository methods persist run/stage/work-item transitions and actual source checksums.
+- History and snapshot writes use batch transactions. Successful durable writes refresh caches/read models explicitly; failed player work preserves last-known-good facts.
+- Source season ID/name is explicit configuration, not a hard-coded constant. Request correlation IDs and sync metrics are emitted at the adapter/coordinator boundary.
+
+The frontend timeout/error and unsafe-database-test items remain cross-cutting verification concerns, but their warehouse-specific acceptance cases are tracked here.
+
+### 10. Common API response contract
+
+All warehouse-facing and downstream analytical endpoints use the response contract in `specs/common-response-contract/spec.md`. Existing endpoints may have a compatibility adapter during migration, but new routes MUST use the common envelope. The envelope carries `data`, a `meta` object containing request/scope/freshness/provenance/pagination information, and a stable `error` object for failures. A response never encodes partial or stale data only in prose or HTTP status; it reports the machine-readable state and missing inputs.
 
 ## Risks / Trade-offs
 
@@ -147,11 +182,11 @@ Raw payload retention must be enforced by a scheduled cleanup job that never del
 
 The rollout gate is a successful full sync against sanitized fixtures, a restart-resume test, and a production-like query proving that current and historical player snapshots cannot be confused.
 
-## Open Questions
+## Finalized implementation choices
 
-- Should raw successful payloads be retained indefinitely locally, or should the default retention be 30/90 days?
-- Should live gameweek polling be an in-process interval or an externally triggered job in the first deployment?
-- Which analytical views should be materialized first: rolling player form, fixture difficulty, price changes, or ownership trends?
-- Should historical seasons be discoverable automatically or imported only when explicitly requested?
-- What is the canonical definition of a finalized gameweek when source endpoints disagree temporarily?
-- Which source fields are required for a dataset to be `actual`, and which may be missing while still serving a `partial` result?
+- Retain successful baseline/raw payloads for 90 days by default, high-frequency live bodies for 30 days after finalization, and all checksums/diagnostics for the configured audit window; make both periods configurable.
+- Use an in-process scheduler for the first local deployment, with the durable work queue allowing a later external trigger without changing sync contracts.
+- Materialize rolling form and fixture difficulty first because they are shared by research, recommendations, and optimization; add price/ownership trend views after the core read models are proven.
+- Discover historical seasons only through explicit configured season IDs or a deliberate backfill request; never import every season implicitly.
+- A gameweek is finalized only when the source marks it finished, all fixtures in the gameweek are finished, and the finalization refresh has no changed required facts; otherwise it remains provisional.
+- `actual` requires the required source-contract identity, schedule/result, player-point, and rules fields for the requested dataset. Missing optional fields yield a warning; missing required fields yield `partial`, `stale`, or `unavailable`.
