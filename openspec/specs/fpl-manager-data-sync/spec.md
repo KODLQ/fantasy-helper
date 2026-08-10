@@ -1,0 +1,105 @@
+# fpl-manager-data-sync Specification
+
+## Purpose
+TBD - created by archiving change fpl-manager-league-sync. Update Purpose after archive.
+## Requirements
+### Requirement: Synchronize configured manager entries
+The system SHALL synchronize only explicitly configured entry IDs and persist their season summaries, season history, transfers, gameweek picks, captaincy, bench, automatic substitutions, chips, transfer costs, rank, and budget observations by season and gameweek.
+
+#### Scenario: Entry history sync succeeds
+- **WHEN** a configured entry summary or history endpoint returns valid data
+- **THEN** the system stores or updates the entry's season-scoped summary and history facts without duplicating prior observations
+
+#### Scenario: Gameweek picks sync succeeds
+- **WHEN** a configured entry's gameweek picks endpoint returns valid data
+- **THEN** the system stores player selection, position, multiplier, captain, vice-captain, automatic substitutions, and associated gameweek summary values
+
+### Requirement: Persist the active FPL team as an imported squad snapshot
+The system SHALL synchronize the configured manager's active FPL team, including its player membership, positions, captaincy, bench state, bank/value, chips, and source gameweek, as a distinct imported snapshot that can be compared with the application's planning squad.
+
+#### Scenario: Authenticated active-team sync succeeds
+- **WHEN** the configured `/my-team/{entry_id}/` endpoint and current-gameweek picks return valid data
+- **THEN** the system stores the latest active-team snapshot linked to the manager entry, season, gameweek, and public player identities
+
+#### Scenario: Active-team sync is unavailable
+- **WHEN** the private active-team endpoint is unauthorized, expired, or not configured
+- **THEN** the system retains the previous imported snapshot, reports its freshness, and does not change the planning squad
+
+### Requirement: Isolate manager synchronization from public synchronization
+The system SHALL maintain independent manager sync runs, freshness, errors, and retention so a manager failure cannot invalidate or block public season/player/fixture data.
+
+#### Scenario: Manager authentication fails
+- **WHEN** a manager-scoped endpoint returns an authentication or permission error
+- **THEN** the manager status reports reauthentication or permission failure, retains prior manager data, and leaves public sync status unchanged
+
+#### Scenario: One entry fails
+- **WHEN** one configured entry cannot be synchronized
+- **THEN** other configured entries continue processing and the run is marked partial with the failed entry identified
+
+### Requirement: Protect authenticated session material
+The system SHALL accept authenticated session material only through an injected secret/session provider and SHALL redact it from logs, diagnostics, API responses, and persisted raw payload metadata.
+
+#### Scenario: Authenticated private request is made
+- **WHEN** `/me/` or `/my-team/{entry_id}/` is enabled with a valid session provider
+- **THEN** the request uses the injected session and stores only non-secret response data and redacted request metadata
+
+#### Scenario: No session is configured
+- **WHEN** a private endpoint is enabled without a session provider
+- **THEN** the system reports the scope as unavailable without attempting a request or storing placeholder credentials
+
+### Requirement: Own and lifecycle remote FPL sessions per local user
+
+The system SHALL keep the local application session separate from remote FPL session material, associate each remote connection with exactly one local user and configured entry, never store an FPL password, and support validation, reauthentication, revocation, and deletion states.
+
+#### Scenario: User supplies a remote session
+- **WHEN** an authenticated local user supplies a cookie/token through an enabled secret provider for an entry
+- **THEN** the provider validates the session, stores only redacted connection status/provenance, and never returns or persists the raw secret in application data
+
+#### Scenario: Remote session expires
+- **WHEN** `/me/` or `/my-team/{entryId}/` returns 401/403
+- **THEN** the connection becomes `reauth_required` or `permission_denied`, private retries stop, prior manager facts remain available, and public sync status is unchanged
+
+#### Scenario: User disconnects a remote session
+- **WHEN** the owning user revokes or deletes a manager connection
+- **THEN** the provider removes the secret, private connection metadata and owned derived records follow the configured deletion policy, and shared public warehouse facts remain intact
+
+### Requirement: Preserve manager privacy and retention
+
+The system SHALL scope manager connections, manager facts, active-team snapshots, and private derived analysis by local owner, shall redact private source payloads, and shall expose export/deletion behavior without deleting shared public facts.
+
+#### Scenario: Another user requests a manager connection
+- **WHEN** a local user requests a connection, snapshot, or private manager fact owned by another user
+- **THEN** the API returns the configured non-disclosing not-found/forbidden response and reveals no connection status, entry ownership, or private data
+
+#### Scenario: Private retention cleanup runs
+- **WHEN** the configured private raw-payload window expires
+- **THEN** raw private bodies/secrets are removed or anonymized while retained canonical facts, redacted provenance, and shared public warehouse rows follow their own retention policies
+
+### Requirement: Provide manager decision-analysis data
+The system SHALL expose stable read models joining manager picks and transfers to public player-gameweek facts, using canonical `player-points-v1`, `team-points-v1`, `captain-delta-v1`, and `transfer-cost-v1` formulas for points, captain multiplier, bench points, transfer cost, chips, and freshness.
+
+#### Scenario: Manager reviews a completed gameweek
+- **WHEN** a client requests a completed gameweek for a configured entry
+- **THEN** the response includes the saved picks and decision outcome metrics joined to finalized public player facts
+
+#### Scenario: Public facts are not finalized
+- **WHEN** manager picks exist but the corresponding public gameweek facts are live or partial
+- **THEN** the response marks the analysis as provisional and includes the public-data freshness warning
+
+### Requirement: Expose scoped manager API contracts
+The system SHALL expose manager summaries, histories, picks, transfers, active-team snapshots, and status through stable versioned endpoints that require explicit entry, season, and gameweek scope where applicable.
+
+#### Scenario: Client requests a manager history
+- **WHEN** a configured entry and season are requested
+- **THEN** the response includes ordered gameweek summaries, snapshot identity, pagination or range metadata, and freshness state
+
+#### Scenario: Client requests an unscoped manager dataset
+- **WHEN** a request omits a required entry, season, or gameweek scope
+- **THEN** the API rejects it with a structured validation error rather than returning an ambiguous latest dataset
+
+### Requirement: Preserve manager source provenance
+The system SHALL retain source endpoint, request scope, response checksum, fetched time, normalization version, and source conflict state for every manager snapshot used by analysis or squad import.
+
+#### Scenario: Two source endpoints disagree
+- **WHEN** authenticated active-team data and public picks differ for the same entry/gameweek
+- **THEN** both observations remain available and the derived snapshot reports a conflict requiring reconciliation
