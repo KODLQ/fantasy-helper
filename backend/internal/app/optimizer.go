@@ -6,7 +6,7 @@ import (
 	"sort"
 )
 
-const AlgorithmVersion = "baseline-1"
+const AlgorithmVersion = "baseline-2"
 
 func ValidateWeights(weights Weights) []ValidationError {
 	values := []struct {
@@ -64,28 +64,72 @@ func (s *Store) Recommend(squad Squad, requested Weights) (Recommendation, []Val
 		}
 		return ordered[i].Score > ordered[j].Score
 	})
+	byPosition := map[int][]RecommendationPlayer{}
+	for _, item := range ordered {
+		byPosition[item.Player.Position] = append(byPosition[item.Player.Position], item)
+	}
+	formations := []struct {
+		name                   string
+		defenders, midfielders int
+		forwards               int
+	}{
+		{"3-4-3", 3, 4, 3},
+		{"3-5-2", 3, 5, 2},
+		{"4-5-1", 4, 5, 1},
+		{"4-4-2", 4, 4, 2},
+		{"4-3-3", 4, 3, 3},
+		{"5-4-1", 5, 4, 1},
+		{"5-3-2", 5, 3, 2},
+		{"5-2-3", 5, 2, 3},
+	}
 	starting := []RecommendationPlayer{}
-	bench := []RecommendationPlayer{}
-	for _, position := range []int{Goalkeeper, Defender, Midfielder, Forward} {
-		count := map[int]int{Goalkeeper: 1, Defender: 3, Midfielder: 4, Forward: 3}[position]
-		candidates := []RecommendationPlayer{}
-		for _, item := range ordered {
-			if item.Player.Position == position {
-				candidates = append(candidates, item)
-			}
+	formation := ""
+	bestScore := math.Inf(-1)
+	for _, candidate := range formations {
+		if len(byPosition[Goalkeeper]) < 1 || len(byPosition[Defender]) < candidate.defenders || len(byPosition[Midfielder]) < candidate.midfielders || len(byPosition[Forward]) < candidate.forwards {
+			continue
 		}
-		for i := 0; i < len(candidates); i++ {
-			if i < count {
-				starting = append(starting, candidates[i])
-			} else {
-				bench = append(bench, candidates[i])
-			}
+		lineup := []RecommendationPlayer{byPosition[Goalkeeper][0]}
+		lineup = append(lineup, byPosition[Defender][:candidate.defenders]...)
+		lineup = append(lineup, byPosition[Midfielder][:candidate.midfielders]...)
+		lineup = append(lineup, byPosition[Forward][:candidate.forwards]...)
+		total := 0.0
+		for _, item := range lineup {
+			total += item.Score
+		}
+		if total > bestScore {
+			bestScore = total
+			starting = lineup
+			formation = candidate.name
+		}
+	}
+	selected := map[int]bool{}
+	for _, item := range starting {
+		selected[item.Player.ID] = true
+	}
+	bench := []RecommendationPlayer{}
+	for _, item := range ordered {
+		if !selected[item.Player.ID] {
+			bench = append(bench, item)
 		}
 	}
 	sort.Slice(starting, func(i, j int) bool {
 		return starting[i].Player.Position < starting[j].Player.Position || (starting[i].Player.Position == starting[j].Player.Position && starting[i].Score > starting[j].Score)
 	})
-	sort.Slice(bench, func(i, j int) bool { return bench[i].Score > bench[j].Score })
+	// FPL substitutes have three ordered outfield slots and one dedicated
+	// goalkeeper slot. Never rank the reserve goalkeeper among the players who
+	// can replace an outfielder.
+	sort.Slice(bench, func(i, j int) bool {
+		leftGoalkeeper := bench[i].Player.Position == Goalkeeper
+		rightGoalkeeper := bench[j].Player.Position == Goalkeeper
+		if leftGoalkeeper != rightGoalkeeper {
+			return !leftGoalkeeper
+		}
+		if bench[i].Score == bench[j].Score {
+			return bench[i].Player.ID < bench[j].Player.ID
+		}
+		return bench[i].Score > bench[j].Score
+	})
 	captain := starting[0]
 	vice := starting[1]
 	for _, item := range starting {
@@ -100,7 +144,7 @@ func (s *Store) Recommend(squad Squad, requested Weights) (Recommendation, []Val
 	if snapshot.IsZero() {
 		snapshot = s.season.UpdatedAt
 	}
-	return Recommendation{Season: season, Gameweek: gameweek, SnapshotAt: snapshot, AlgorithmVersion: AlgorithmVersion, Weights: requested, StartingXI: starting, Bench: bench, Captain: captain, ViceCaptain: vice, HeuristicNotice: "This is a transparent heuristic, not a guaranteed point projection."}, nil
+	return Recommendation{Season: season, Gameweek: gameweek, SnapshotAt: snapshot, AlgorithmVersion: AlgorithmVersion, Formation: formation, Weights: requested, StartingXI: starting, Bench: bench, Captain: captain, ViceCaptain: vice, HeuristicNotice: "This is a transparent heuristic, not a guaranteed point projection."}, nil
 }
 
 func (s *Store) scorePlayer(player Player, weights Weights) []FactorContribution {

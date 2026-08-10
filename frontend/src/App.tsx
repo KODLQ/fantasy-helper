@@ -57,7 +57,7 @@ function App() {
         {view === 'squad' && (auth.user ? <SquadPlanner seasonId={seasonId} onRecommend={() => setView('recommendations')} onLoadDemo={loadDemoSquad} /> : <ProtectedWorkspace title="Sign in to plan your squad" onSignIn={() => setProfileOpen(true)} />)}
         {view === 'recommendations' && (auth.user ? <Recommendations seasonId={seasonId} /> : <ProtectedWorkspace title="Sign in to save private recommendations" onSignIn={() => setProfileOpen(true)} />)}
         {view === 'manager' && (auth.user ? <ManagerWorkspace seasonId={seasonId} gameweek={gameweek ?? 1} /> : <ProtectedWorkspace title="Sign in to sync your FPL manager and leagues" onSignIn={() => setProfileOpen(true)} />)}
-        {selectedID && <PlayerDrawer seasonId={seasonId} id={selectedID} onClose={() => setSelectedID(null)} onCompare={addCompare} onAddToSquad={() => { setSelectedID(null); setView('squad'); setNotice('Use the Squad planner to manage this player.'); }} />}
+        {selectedID && <PlayerDrawer seasonId={seasonId} id={selectedID} onClose={() => setSelectedID(null)} onCompare={addCompare} onAddToSquad={() => { setSelectedID(null); setView('squad'); setNotice('Squad planner opened. Player transfers are not available in this workspace yet.'); }} />}
       </>}
     </main>
   </div>;

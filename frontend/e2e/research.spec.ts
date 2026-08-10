@@ -19,6 +19,7 @@ test.describe('player research', () => {
     await expect(drawer).toContainText('Mason');
     await expect(drawer).toContainText('Recent output');
     await expect(drawer).toContainText('Next fixture');
+    await expect(drawer).toContainText(/vs|No upcoming fixture loaded/);
   });
 
   test('sends pagination, sorting, filtering, and page size to the player endpoint', async ({ page }) => {

@@ -43,8 +43,20 @@ func TestRecommendationIsReproducibleAndRejectsInvalidWeights(t *testing.T) {
 	if len(errors) != 0 {
 		t.Fatalf("unexpected recommendation errors: %#v", errors)
 	}
+	legalFormations := map[string]bool{"3-4-3": true, "3-5-2": true, "4-5-1": true, "4-4-2": true, "4-3-3": true, "5-4-1": true, "5-3-2": true, "5-2-3": true}
+	if !legalFormations[first.Formation] || len(first.StartingXI) != 11 {
+		t.Fatalf("recommendation must select a legal formation: %q %#v", first.Formation, first.StartingXI)
+	}
+	if len(first.Bench) != 4 || first.Bench[3].Player.Position != Goalkeeper {
+		t.Fatalf("reserve goalkeeper must use the dedicated final bench slot: %#v", first.Bench)
+	}
+	for _, item := range first.Bench[:3] {
+		if item.Player.Position == Goalkeeper {
+			t.Fatalf("goalkeeper cannot receive an outfield substitution rank: %#v", first.Bench)
+		}
+	}
 	second, errors := store.Recommend(plan, DefaultWeights())
-	if len(errors) != 0 || first.Captain.Player.ID != second.Captain.Player.ID || first.ViceCaptain.Player.ID != second.ViceCaptain.Player.ID {
+	if len(errors) != 0 || first.Formation != second.Formation || first.Captain.Player.ID != second.Captain.Player.ID || first.ViceCaptain.Player.ID != second.ViceCaptain.Player.ID {
 		t.Fatalf("recommendation is not reproducible: %#v %#v", first, second)
 	}
 	if _, errors := store.Recommend(plan, Weights{Form: 1, Minutes: 1}); len(errors) == 0 {

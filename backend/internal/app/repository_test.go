@@ -146,7 +146,7 @@ func TestPostgresRepositoryPersistence(t *testing.T) {
 		t.Fatalf("unexpected PostgreSQL team catalogue: teams=%#v err=%v", teams, err)
 	}
 	detail, found, err := repository.LoadPlayerDetail(ctx, snapshot.Season.ID, players[0].ID)
-	if err != nil || !found || detail.Player.ID != players[0].ID || detail.Team.ShortName == "" {
+	if err != nil || !found || detail.Player.ID != players[0].ID || detail.Team.ShortName == "" || detail.FixtureContext == "" {
 		t.Fatalf("unexpected PostgreSQL player detail: %#v found=%v err=%v", detail, found, err)
 	}
 	loaded, ok, err := repository.LoadSnapshot(ctx)

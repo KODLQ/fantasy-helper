@@ -73,9 +73,9 @@ test.describe('application buttons', () => {
 
     await page.locator('nav').getByRole('button', { name: /Compare/ }).click();
     await expect(page.getByTestId('comparison-card')).toHaveCount(2);
-    await page.getByTestId('comparison-card').first().getByRole('button', { name: '×' }).click();
+    await page.getByTestId('comparison-card').first().getByRole('button', { name: /Remove .* from comparison/ }).click();
     await expect(page.getByTestId('comparison-card')).toHaveCount(1);
-    await page.getByTestId('comparison-card').first().getByRole('button', { name: '×' }).click();
+    await page.getByTestId('comparison-card').first().getByRole('button', { name: /Remove .* from comparison/ }).click();
     await expect(page.getByRole('heading', { name: 'Your comparison is empty' })).toBeVisible();
     await page.getByRole('button', { name: 'Find players' }).click();
     await expect(page.getByRole('heading', { name: 'Player research' })).toBeVisible();
@@ -84,9 +84,9 @@ test.describe('application buttons', () => {
   test('drawer add-to-squad button opens the planning workspace', async ({ page }) => {
     await openApp(page);
     await page.getByRole('button', { name: 'Inspect player' }).first().click();
-    await page.getByTestId('player-drawer').getByRole('button', { name: '＋ Add to squad' }).click();
+    await page.getByTestId('player-drawer').getByRole('button', { name: 'Open squad planner' }).click();
     await expect(page.getByRole('heading', { name: 'Squad planner' })).toBeVisible();
-    await expect(page.getByText('Use the Squad planner to manage this player.')).toBeVisible();
+    await expect(page.getByText('Squad planner opened. Player transfers are not available in this workspace yet.')).toBeVisible();
   });
 
   test('squad and recommendation action buttons work', async ({ page }) => {
