@@ -57,10 +57,11 @@ export type AuthSession = { user: AuthUser; csrfToken: string; expiresAt: string
 export type AuthConfig = { registrationEnabled: boolean; emailProviderConfigured: boolean; minimumPasswordLength: number };
 export type ManagerScope = { id?: number; type: 'entry' | 'league'; sourceId: number; enabled: boolean; memberLimit: number };
 export type ManagerStatus = { status: string; runId?: number; completedWork: number; failedWork: number; warning?: string; freshness: Freshness };
-export type ManagerPick = { playerId: number; position: number; multiplier: number; captain: boolean; viceCaptain: boolean };
-export type ImportPreview = { snapshot: { snapshotId: number; entryId: number; gameweek: number; state: string; conflictState: string; picks: ManagerPick[] }; proposed: Squad; addedPlayerIds: number[]; removedPlayerIds: number[]; lineupChanged: boolean; captainChanged: boolean; validation: ValidationError[]; hasChanges: boolean };
+export type ManagerPick = { playerId: number; playerPosition?: number; position: number; multiplier: number; captain: boolean; viceCaptain: boolean };
+export type ImportPreview = { snapshot: { snapshotId: number; entryId: number; gameweek: number; state: string; missingInputs: string[]; conflictState: string; picks: ManagerPick[] }; proposed: Squad; addedPlayerIds: number[]; removedPlayerIds: number[]; lineupChanged: boolean; captainChanged: boolean; validation: ValidationError[]; hasChanges: boolean };
+export type ImportResult = { snapshotId: number; mode: 'draft' | 'replace'; draftId?: number; planId?: number; resultingVersion: number; squad: Squad; idempotent: boolean };
 export type LeagueStandings = { leagueId: number; name: string; page: number; hasNext: boolean; members: { entryId: number; entryName: string; playerName: string; rank: number; lastRank: number; points: number }[] };
-export type LeagueComparison = { leagueId: number; seasonId: number; gameweek: number; selectedEntryIds: number[]; omittedEntryIds: number[]; comparisons: { entryId: number; sharedPlayers: number[]; differentials: number[]; overlap: number; netPoints: number; pointDifference: number; outcomeState: string }[]; outcomeState: string; algorithmVersion?: string; missingInputs: string[] };
+export type LeagueComparison = { leagueId: number; seasonId: number; gameweek: number; selectedEntryIds: number[]; omittedEntryIds: number[]; failedMemberEntryIds: number[]; ownership: { playerId: number; count: number; rate: number }[]; sourceSnapshotAt?: string; comparisons: { entryId: number; opponentEntryId: number; sharedPlayers: number[]; differentials: number[]; benchPlayerIds: number[]; benchDifferences: number[]; captainId: number; viceCaptainId: number; captainDifferent: boolean; viceCaptainDifferent: boolean; formation: string; formationDifferent: boolean; overlap: number; grossPoints: number; transferCost: number; netPoints: number; pointDifference: number; playerContributions: Record<number, number>; outcomeState: string }[]; outcomeState: string; algorithmVersion?: string; missingInputs: string[] };
 export type ValidationError = { code: string; rule: string; message: string; current?: unknown; required?: unknown; playerId?: number };
 export type Squad = { name: string; budget: number; players: Player[]; purchasePrices: Record<number, number>; startingPlayerIds: number[]; benchPlayerIds: number[]; captainId: number; viceCaptainId: number; formation: string; totalCost: number; remainingBudget: number; validation: ValidationError[] };
 export type RecommendationPlayer = { player: Player; score: number; factors: { name: string; signal: number; weight: number; contribution: number }[]; fixture: string; explanation: string };
@@ -182,7 +183,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     const body = await parseBody(response);
     if (!response.ok) {
       const error = body && typeof body === 'object' && 'error' in body ? (body as { error?: { code?: string; message?: string; details?: unknown } }).error : undefined;
-      if (response.status === 401 && !path.endsWith('/auth/login') && !path.endsWith('/auth/me')) authenticationFailureListener?.();
+      if (response.status === 401 && error?.code !== 'remote_authentication_failed' && !path.endsWith('/auth/login') && !path.endsWith('/auth/me')) authenticationFailureListener?.();
       throw new ApiError(error?.message ?? `Request failed with status ${response.status}.`, response.status, error?.code, response.headers.get('x-request-id') ?? requestId, error?.details);
     }
     if (staleKey && latestRequests.get(staleKey) !== sequence) {
@@ -233,6 +234,7 @@ export const api = {
   managerSync: (seasonId: number, gameweek: number) => request<ManagerStatus>('/api/v1/manager/sync', { method: 'POST', body: JSON.stringify({ seasonId, gameweek }), operation: 'manager-sync' }),
   managerStatus: () => request<ManagerStatus>('/api/v1/manager/status', { operation: 'manager-status' }),
   importPreview: (seasonId: number, gameweek: number, entryId: number) => request<ImportPreview>(`/api/v1/squad/import/preview?seasonId=${seasonId}&gameweek=${gameweek}&entryId=${entryId}`, { operation: 'import-preview' }),
+  importActiveTeam: (seasonId: number, gameweek: number, entryId: number, snapshotId: number, mode: 'draft' | 'replace', confirmReplace = false) => request<ImportResult>('/api/v1/squad/import', { method: 'POST', body: JSON.stringify({ seasonId, gameweek, entryId, snapshotId, mode, confirmReplace }), operation: 'active-team-import' }),
   leagueStandings: (seasonId: number, gameweek: number, leagueId: number, page = 1) => request<LeagueStandings>(`/api/v1/manager/leagues/${leagueId}/standings?seasonId=${seasonId}&gameweek=${gameweek}&page=${page}`, { operation: 'league-standings' }),
   leagueComparison: (seasonId: number, gameweek: number, leagueId: number, entryIds: number[], limit: number) => request<LeagueComparison>(`/api/v1/manager/leagues/${leagueId}/comparison?seasonId=${seasonId}&gameweek=${gameweek}&entryIds=${entryIds.join(',')}&limit=${limit}`, { operation: 'league-comparison' }),
 };

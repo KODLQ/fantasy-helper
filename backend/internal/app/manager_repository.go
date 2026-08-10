@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"sort"
 	"time"
 )
 
@@ -17,11 +16,12 @@ type ManagerDataRepository interface {
 	StartManagerRun(context.Context, int64, string) (int64, error)
 	FinishManagerRun(context.Context, int64, string, string) error
 	EnqueueManagerWork(context.Context, int64, []ManagerWorkItem) error
+	UpdateManagerWork(context.Context, int64, string, string, string) error
 	PersistEntry(context.Context, int64, int, sourceEntry, string, time.Time) error
 	PersistHistory(context.Context, int64, int, int, sourceEntryHistory, string, time.Time) error
 	PersistTransfers(context.Context, int64, int, int, []sourceTransfer, string) error
 	PersistPicks(context.Context, int64, int, int, int, sourcePicks, string, time.Time, string) (int64, error)
-	PersistActiveTeam(context.Context, int64, int, int, int, sourceMyTeam, sourcePicks, string, time.Time) (int64, error)
+	PersistActiveTeam(context.Context, int64, int, int, int, sourceMyTeam, sourcePicks, bool, string, time.Time) (int64, error)
 	PersistLeaguePage(context.Context, int64, int, int, int, int, sourceLeagueStandings, string, time.Time) error
 	ExportManagerData(context.Context, int64) (map[string]any, error)
 	DeleteManagerData(context.Context, int64) error
@@ -33,6 +33,10 @@ type ManagerDataRepository interface {
 	LoadActiveTeam(context.Context, int64, int, int, int) (ActiveTeamSnapshot, bool, error)
 	LoadLeagueMembers(context.Context, int64, int, int, int) ([]LeagueMember, error)
 	LoadPlayerGameweekPoints(context.Context, int, int) (map[int]int, string, error)
+	ImportActiveTeam(context.Context, int64, int, int64, string, Squad) (SquadImportResult, error)
+	LinkLeagueMemberPick(context.Context, int64, int, int, int, int, int64, string, string) error
+	LoadManagerDecisionAnalysis(context.Context, int64, int, int, int) (ManagerDecisionAnalysis, error)
+	LoadLeagueMemberFailures(context.Context, int64, int, int, int) ([]int, error)
 }
 
 type ManagerWorkItem struct {
@@ -94,6 +98,11 @@ func (r *PostgresRepository) EnqueueManagerWork(ctx context.Context, runID int64
 		}
 	}
 	return nil
+}
+
+func (r *PostgresRepository) UpdateManagerWork(ctx context.Context, runID int64, naturalKey, state, lastError string) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE manager_sync_work_items SET state=$3,attempts=attempts+1,last_error=$4,available_at=CASE WHEN $3='retryable' THEN NOW()+LEAST(INTERVAL '15 minutes',INTERVAL '1 minute'*(attempts+1)) ELSE available_at END WHERE run_id=$1 AND natural_key=$2`, runID, naturalKey, state, nullableString(lastError))
+	return err
 }
 
 func resolveManagerEntry(tx *sql.Tx, ctx context.Context, userID int64, seasonSourceID, entrySourceID int) (int64, error) {
@@ -168,19 +177,47 @@ func (r *PostgresRepository) PersistPicks(ctx context.Context, userID int64, sea
 				return err
 			}
 		}
+		for _, automaticSub := range value.AutomaticSubs {
+			_, err = tx.ExecContext(ctx, `INSERT INTO manager_automatic_substitutions (snapshot_id,player_in_id,player_out_id) SELECT $1,pin.id,pout.id FROM seasons s JOIN players pin ON pin.season_id=s.id AND pin.source_id=$3 JOIN players pout ON pout.season_id=s.id AND pout.source_id=$4 WHERE s.source_id=$2 ON CONFLICT DO NOTHING`, snapshotID, seasonID, automaticSub.ElementIn, automaticSub.ElementOut)
+			if err != nil {
+				return err
+			}
+		}
+		if value.ActiveChip != "" {
+			_, err = tx.ExecContext(ctx, `INSERT INTO manager_chips (entry_id,gameweek_id,chip_name) SELECT $1,g.id,$4 FROM gameweeks g JOIN seasons s ON s.id=g.season_id WHERE s.source_id=$2 AND g.source_id=$3 ON CONFLICT DO NOTHING`, entryDB, seasonID, gameweek, value.ActiveChip)
+			if err != nil {
+				return err
+			}
+		}
+		_, err = tx.ExecContext(ctx, `INSERT INTO manager_gameweek_summaries (entry_id,gameweek_id,points,rank,overall_rank,bank,value,transfers,transfer_cost,bench_points,source_checksum,source_fetched_at,normalized_at) SELECT $1,g.id,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW() FROM gameweeks g JOIN seasons s ON s.id=g.season_id WHERE s.source_id=$2 AND g.source_id=$3 ON CONFLICT (entry_id,gameweek_id,source_checksum) DO NOTHING`, entryDB, seasonID, gameweek, value.EntryHistory.Points, nullableInt(value.EntryHistory.Rank), nullableInt(value.EntryHistory.OverallRank), value.EntryHistory.Bank, value.EntryHistory.Value, value.EntryHistory.EventTransfers, value.EntryHistory.EventTransfersCost, value.EntryHistory.PointsOnBench, checksum, fetched)
+		if err != nil {
+			return err
+		}
 		return nil
 	})
 	return snapshotID, err
 }
 
-func (r *PostgresRepository) PersistActiveTeam(ctx context.Context, userID int64, seasonID, entryID, gameweek int, team sourceMyTeam, picks sourcePicks, checksum string, fetched time.Time) (int64, error) {
+func (r *PostgresRepository) PersistActiveTeam(ctx context.Context, userID int64, seasonID, entryID, gameweek int, team sourceMyTeam, picks sourcePicks, publicPicksAvailable bool, checksum string, fetched time.Time) (int64, error) {
 	var id int64
 	err := r.WithTransaction(ctx, func(tx *sql.Tx) error {
 		entryDB, err := resolveManagerEntry(tx, ctx, userID, seasonID, entryID)
 		if err != nil {
 			return err
 		}
-		err = tx.QueryRowContext(ctx, `INSERT INTO active_team_snapshots (user_id,entry_id,gameweek_id,bank,team_value,source_endpoint_set,source_checksum,source_fetched_at,normalized_at) SELECT $1,$2,g.id,$5,$6,ARRAY[$7,$8],$9,$10,NOW() FROM gameweeks g JOIN seasons s ON s.id=g.season_id WHERE s.source_id=$3 AND g.source_id=$4 ON CONFLICT (user_id,entry_id,gameweek_id,source_checksum) DO UPDATE SET normalized_at=EXCLUDED.normalized_at RETURNING id`, userID, entryDB, seasonID, gameweek, team.Transfers.Bank, team.Transfers.Value, fmt.Sprintf("/my-team/%d/", entryID), fmt.Sprintf("/entry/%d/event/%d/picks/", entryID, gameweek), checksum, fetched).Scan(&id)
+		conflictState := "none"
+		if !sourceTeamMatchesPicks(team, picks) {
+			conflictState = "source-disagreement"
+		}
+		endpointSet := fmt.Sprintf(`{"/my-team/%d/"}`, entryID)
+		if publicPicksAvailable {
+			endpointSet = fmt.Sprintf(`{"/my-team/%d/","/entry/%d/event/%d/picks/"}`, entryID, entryID, gameweek)
+		}
+		state, missingInputs := "complete", "{}"
+		if !publicPicksAvailable {
+			state, missingInputs = "partial", "{public-gameweek-picks}"
+		}
+		err = tx.QueryRowContext(ctx, `INSERT INTO active_team_snapshots (user_id,entry_id,gameweek_id,bank,team_value,active_chip,source_endpoint_set,source_checksum,source_fetched_at,normalized_at,state,conflict_state,missing_inputs) SELECT $1,$2,g.id,$5,$6,$7,$8::text[],$9,$10,NOW(),$11,$12,$13::text[] FROM gameweeks g JOIN seasons s ON s.id=g.season_id WHERE s.source_id=$3 AND g.source_id=$4 ON CONFLICT (user_id,entry_id,gameweek_id,source_checksum) DO UPDATE SET normalized_at=EXCLUDED.normalized_at,state=EXCLUDED.state,conflict_state=EXCLUDED.conflict_state,missing_inputs=EXCLUDED.missing_inputs RETURNING id`, userID, entryDB, seasonID, gameweek, team.Transfers.Bank, team.Transfers.Value, nullableString(picks.ActiveChip), endpointSet, checksum, fetched, state, conflictState, missingInputs).Scan(&id)
 		if err != nil {
 			return err
 		}
@@ -193,6 +230,23 @@ func (r *PostgresRepository) PersistActiveTeam(ctx context.Context, userID int64
 		return nil
 	})
 	return id, err
+}
+
+func sourceTeamMatchesPicks(team sourceMyTeam, picks sourcePicks) bool {
+	if len(team.Picks) != len(picks.Picks) {
+		return false
+	}
+	public := map[int][3]any{}
+	for _, pick := range picks.Picks {
+		public[pick.Element] = [3]any{pick.Multiplier, pick.IsCaptain, pick.IsViceCaptain}
+	}
+	for _, pick := range team.Picks {
+		value, found := public[pick.Element]
+		if !found || value != [3]any{pick.Multiplier, pick.IsCaptain, pick.IsViceCaptain} {
+			return false
+		}
+	}
+	return true
 }
 
 func (r *PostgresRepository) PersistLeaguePage(ctx context.Context, userID int64, seasonID, gameweek, phase, page int, value sourceLeagueStandings, checksum string, fetched time.Time) error {
@@ -212,9 +266,20 @@ func (r *PostgresRepository) PersistLeaguePage(ctx context.Context, userID int64
 			if err != nil {
 				return err
 			}
+			if _, err = tx.ExecContext(ctx, `INSERT INTO manager_entries (user_id,season_id,source_id,entry_name,player_first_name,normalized_at) VALUES ($1,(SELECT id FROM seasons WHERE source_id=$2),$3,$4,$5,NOW()) ON CONFLICT (user_id,season_id,source_id) DO UPDATE SET entry_name=EXCLUDED.entry_name,player_first_name=EXCLUDED.player_first_name,normalized_at=NOW()`, userID, seasonID, m.Entry, m.EntryName, m.PlayerName); err != nil {
+				return err
+			}
+			if _, err = tx.ExecContext(ctx, `INSERT INTO league_member_pick_links (league_id,entry_source_id,gameweek_id,state) SELECT $1,$2,g.id,'pending' FROM gameweeks g JOIN seasons s ON s.id=g.season_id WHERE s.source_id=$3 AND g.source_id=$4 ON CONFLICT (league_id,entry_source_id,gameweek_id) DO NOTHING`, leagueDB, m.Entry, seasonID, gameweek); err != nil {
+				return err
+			}
 		}
 		return nil
 	})
+}
+
+func (r *PostgresRepository) LinkLeagueMemberPick(ctx context.Context, userID int64, seasonID, leagueID, gameweek, entryID int, snapshotID int64, state, lastError string) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE league_member_pick_links l SET pick_snapshot_id=$6,state=$7,last_error=$8 FROM classic_leagues cl JOIN seasons s ON s.id=cl.season_id JOIN gameweeks g ON g.season_id=s.id AND g.source_id=$4 WHERE l.league_id=cl.id AND l.gameweek_id=g.id AND cl.user_id=$1 AND s.source_id=$2 AND cl.source_id=$3 AND l.entry_source_id=$5`, userID, seasonID, leagueID, gameweek, entryID, nullableInt64(snapshotID), state, nullableString(lastError))
+	return err
 }
 
 func (r *PostgresRepository) ExportManagerData(ctx context.Context, userID int64) (map[string]any, error) {
@@ -237,12 +302,53 @@ func (r *PostgresRepository) ExportManagerData(ctx context.Context, userID int64
 		}
 		connections = append(connections, map[string]any{"entryId": id, "providerType": provider, "state": state, "lastValidatedAt": validated.Time})
 	}
-	return map[string]any{"scopes": scopes, "connections": connections, "exportedAt": time.Now().UTC()}, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	export := map[string]any{"scopes": scopes, "connections": connections, "exportedAt": time.Now().UTC()}
+	queries := map[string]string{
+		"seasonSummaries": `SELECT s.source_id AS "seasonId",me.source_id AS "entryId",me.entry_name AS "entryName",ss.overall_points AS "overallPoints",ss.overall_rank AS "overallRank",ss.value,ss.bank,ss.source_fetched_at AS "sourceFetchedAt",ss.normalized_at AS "normalizedAt",ss.conflict_state AS "conflictState" FROM manager_entries me JOIN seasons s ON s.id=me.season_id LEFT JOIN manager_season_summaries ss ON ss.entry_id=me.id WHERE me.user_id=$1 ORDER BY s.source_id,me.source_id,ss.id`,
+		"gameweeks":       `SELECT s.source_id AS "seasonId",me.source_id AS "entryId",g.source_id AS gameweek,h.points,h.rank,h.overall_rank AS "overallRank",h.bank,h.value,h.transfers,h.transfer_cost AS "transferCost",h.bench_points AS "benchPoints",h.normalized_at AS "normalizedAt" FROM manager_gameweek_summaries h JOIN manager_entries me ON me.id=h.entry_id JOIN seasons s ON s.id=me.season_id JOIN gameweeks g ON g.id=h.gameweek_id WHERE me.user_id=$1 ORDER BY s.source_id,me.source_id,g.source_id,h.id`,
+		"picks":           `SELECT s.source_id AS "seasonId",me.source_id AS "entryId",g.source_id AS gameweek,p.source_id AS "playerId",mp.position,mp.multiplier,mp.is_captain AS captain,mp.is_vice_captain AS "viceCaptain",ps.source_fetched_at AS "sourceFetchedAt",ps.conflict_state AS "conflictState" FROM manager_pick_snapshots ps JOIN manager_entries me ON me.id=ps.entry_id JOIN seasons s ON s.id=me.season_id JOIN gameweeks g ON g.id=ps.gameweek_id JOIN manager_picks mp ON mp.snapshot_id=ps.id JOIN players p ON p.id=mp.player_id WHERE me.user_id=$1 ORDER BY s.source_id,me.source_id,g.source_id,ps.id,mp.position`,
+		"activeTeams":     `SELECT ats.id AS "snapshotId",s.source_id AS "seasonId",me.source_id AS "entryId",g.source_id AS gameweek,ats.bank,ats.team_value AS "teamValue",ats.active_chip AS "activeChip",ats.source_fetched_at AS "sourceFetchedAt",ats.normalized_at AS "normalizedAt",ats.state,ats.conflict_state AS "conflictState" FROM active_team_snapshots ats JOIN manager_entries me ON me.id=ats.entry_id JOIN seasons s ON s.id=me.season_id JOIN gameweeks g ON g.id=ats.gameweek_id WHERE ats.user_id=$1 ORDER BY ats.id`,
+		"leagues":         `SELECT s.source_id AS "seasonId",cl.source_id AS "leagueId",cl.name,cl.closed,g.source_id AS gameweek,ls.page,ls.has_next AS "hasNext",m.entry_source_id AS "entryId",m.entry_name AS "entryName",m.player_name AS "playerName",m.rank,m.total_points AS points FROM classic_leagues cl JOIN seasons s ON s.id=cl.season_id LEFT JOIN league_standing_snapshots ls ON ls.league_id=cl.id LEFT JOIN gameweeks g ON g.id=ls.gameweek_id LEFT JOIN league_standing_members m ON m.snapshot_id=ls.id WHERE cl.user_id=$1 ORDER BY cl.source_id,g.source_id,ls.page,m.rank`,
+		"imports":         `SELECT e.snapshot_id AS "snapshotId",e.mode,e.plan_id AS "planId",e.draft_id AS "draftId",e.resulting_version AS "resultingVersion",e.confirmed_at AS "confirmedAt" FROM squad_import_events e WHERE e.user_id=$1 ORDER BY e.id`,
+	}
+	for name, query := range queries {
+		items, err := r.managerExportRows(ctx, query, userID)
+		if err != nil {
+			return nil, err
+		}
+		export[name] = items
+	}
+	return export, nil
+}
+
+func (r *PostgresRepository) managerExportRows(ctx context.Context, query string, userID int64) ([]map[string]any, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT row_to_json(export_row) FROM (`+query+`) export_row`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []map[string]any{}
+	for rows.Next() {
+		var raw []byte
+		if err := rows.Scan(&raw); err != nil {
+			return nil, err
+		}
+		item := map[string]any{}
+		if err := json.Unmarshal(raw, &item); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
 }
 func (r *PostgresRepository) DeleteManagerData(ctx context.Context, userID int64) error {
 	return r.WithTransaction(ctx, func(tx *sql.Tx) error {
-		tables := []string{"manager_sync_runs", "classic_leagues", "manager_entries", "manager_connections", "manager_sync_scopes"}
-		sort.Strings(tables)
+		// Import records reference active-team snapshots with RESTRICT, so remove
+		// owner-scoped import audit data before the manager entries cascade.
+		tables := []string{"squad_import_events", "squad_import_drafts", "manager_sync_runs", "classic_leagues", "manager_entries", "manager_connections", "manager_sync_scopes"}
 		for _, table := range tables {
 			if _, err := tx.ExecContext(ctx, `DELETE FROM `+table+` WHERE user_id=$1`, userID); err != nil {
 				return err

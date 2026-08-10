@@ -143,6 +143,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/manager/entries/", a.managerEntryData)
 	mux.HandleFunc("/api/v1/manager/leagues/", a.managerLeagueData)
 	mux.HandleFunc("/api/v1/squad/import/preview", a.squadImportPreview)
+	mux.HandleFunc("/api/v1/squad/import", a.squadImport)
 	mux.HandleFunc("/api/v1/sync/status", a.syncStatus)
 	mux.HandleFunc("/api/v1/sync/runs/", a.syncRun)
 	mux.HandleFunc("/api/v1/data/snapshots", a.dataSnapshots)

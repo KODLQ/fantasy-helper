@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 )
@@ -76,7 +77,7 @@ func (s *ManagerService) Sync(ctx context.Context, userID int64, seasonID, gamew
 		}
 		if syncErr != nil {
 			status.FailedWork++
-			status.Warning = syncErr.Error()
+			status.Warning = fmt.Sprintf("%s:%d: %v", scope.Type, scope.SourceID, syncErr)
 		} else {
 			status.CompletedWork++
 		}
@@ -111,42 +112,54 @@ func (s *ManagerService) syncEntry(ctx context.Context, userID int64, seasonID, 
 	}
 	entry, checksum, fetched, err := s.Source.Entry(ctx, entryID)
 	if err != nil {
+		_ = s.Repository.UpdateManagerWork(ctx, runID, work[0].NaturalKey, "retryable", err.Error())
 		return err
 	}
 	if err = s.Repository.PersistEntry(ctx, userID, seasonID, entry, checksum, fetched); err != nil {
+		_ = s.Repository.UpdateManagerWork(ctx, runID, work[0].NaturalKey, "retryable", err.Error())
 		return err
 	}
+	_ = s.Repository.UpdateManagerWork(ctx, runID, work[0].NaturalKey, "completed", "")
 	history, checksum, fetched, err := s.Source.History(ctx, entryID)
 	if err != nil {
+		_ = s.Repository.UpdateManagerWork(ctx, runID, work[1].NaturalKey, "retryable", err.Error())
 		return err
 	}
 	if err = s.Repository.PersistHistory(ctx, userID, seasonID, entryID, history, checksum, fetched); err != nil {
+		_ = s.Repository.UpdateManagerWork(ctx, runID, work[1].NaturalKey, "retryable", err.Error())
 		return err
 	}
+	_ = s.Repository.UpdateManagerWork(ctx, runID, work[1].NaturalKey, "completed", "")
 	transfers, checksum, _, err := s.Source.Transfers(ctx, entryID)
 	if err != nil {
+		_ = s.Repository.UpdateManagerWork(ctx, runID, work[2].NaturalKey, "retryable", err.Error())
 		return err
 	}
 	if err = s.Repository.PersistTransfers(ctx, userID, seasonID, entryID, transfers, checksum); err != nil {
+		_ = s.Repository.UpdateManagerWork(ctx, runID, work[2].NaturalKey, "retryable", err.Error())
 		return err
 	}
-	picks, checksum, fetched, err := s.Source.Picks(ctx, entryID, gameweek)
-	if err != nil {
+	_ = s.Repository.UpdateManagerWork(ctx, runID, work[2].NaturalKey, "completed", "")
+	picks, picksChecksum, fetched, picksErr := s.Source.Picks(ctx, entryID, gameweek)
+	publicPicksAvailable := picksErr == nil
+	if picksErr != nil {
+		_ = s.Repository.UpdateManagerWork(ctx, runID, work[3].NaturalKey, "retryable", picksErr.Error())
+	} else if _, err = s.Repository.PersistPicks(ctx, userID, seasonID, entryID, gameweek, picks, picksChecksum, fetched, fmt.Sprintf("/entry/%d/event/%d/picks/", entryID, gameweek)); err != nil {
+		_ = s.Repository.UpdateManagerWork(ctx, runID, work[3].NaturalKey, "retryable", err.Error())
 		return err
-	}
-	if _, err = s.Repository.PersistPicks(ctx, userID, seasonID, entryID, gameweek, picks, checksum, fetched, fmt.Sprintf("/entry/%d/event/%d/picks/", entryID, gameweek)); err != nil {
-		return err
+	} else {
+		_ = s.Repository.UpdateManagerWork(ctx, runID, work[3].NaturalKey, "completed", "")
 	}
 	if s.Sessions == nil {
-		return nil
+		return picksErr
 	}
 	session, err := s.Sessions.Get(ctx, userID, entryID)
 	if errors.Is(err, ErrRemoteSessionMissing) {
-		return nil
+		return picksErr
 	}
 	if err != nil {
 		_ = s.Repository.SetManagerConnectionState(ctx, userID, entryID, RemoteReauthRequired)
-		return nil
+		return fmt.Errorf("private active-team session requires reauthentication")
 	}
 	private, privateChecksum, privateFetched, err := s.Source.MyTeam(ctx, entryID, session)
 	if err != nil {
@@ -157,15 +170,34 @@ func (s *ManagerService) syncEntry(ctx context.Context, userID int64, seasonID, 
 				state = RemotePermissionDenied
 			}
 			_ = s.Repository.SetManagerConnectionState(ctx, userID, entryID, state)
-			return nil
+			return fmt.Errorf("private active-team sync failed (%s)", sourceErr.Code)
 		}
 		return err
 	}
-	combined := sha256.Sum256([]byte(privateChecksum + checksum))
-	if _, err = s.Repository.PersistActiveTeam(ctx, userID, seasonID, entryID, gameweek, private, picks, fmt.Sprintf("%x", combined), privateFetched); err != nil {
+	if !publicPicksAvailable {
+		picks = sourcePicksFromPrivate(private, gameweek)
+	}
+	combined := sha256.Sum256([]byte(privateChecksum + picksChecksum))
+	if _, err = s.Repository.PersistActiveTeam(ctx, userID, seasonID, entryID, gameweek, private, picks, publicPicksAvailable, fmt.Sprintf("%x", combined), privateFetched); err != nil {
 		return err
 	}
-	return s.Repository.SetManagerConnectionState(ctx, userID, entryID, RemoteConnected)
+	if err = s.Repository.SetManagerConnectionState(ctx, userID, entryID, RemoteConnected); err != nil {
+		return err
+	}
+	return picksErr
+}
+
+func sourcePicksFromPrivate(team sourceMyTeam, gameweek int) sourcePicks {
+	result := sourcePicks{}
+	result.EntryHistory.Event = gameweek
+	result.Picks = append(result.Picks, team.Picks...)
+	for _, chip := range team.Chips {
+		if chip.Status == "active" || chip.Status == "played" {
+			result.ActiveChip = chip.Name
+			break
+		}
+	}
+	return result
 }
 
 func (s *ManagerService) syncLeague(ctx context.Context, userID int64, seasonID, gameweek int, scope ManagerScope, runID int64) error {
@@ -173,23 +205,87 @@ func (s *ManagerService) syncLeague(ctx context.Context, userID int64, seasonID,
 	if max < 1 {
 		max = 100
 	}
+	allMembers := []LeagueMember{}
 	for page := 1; page <= max; page++ {
+		key := fmt.Sprintf("league:%d:gw:%d:page:%d", scope.SourceID, gameweek, page)
 		endpoint := fmt.Sprintf("/leagues-classic/%d/standings/?page_standings=%d&phase=1", scope.SourceID, page)
-		if err := s.Repository.EnqueueManagerWork(ctx, runID, []ManagerWorkItem{{NaturalKey: fmt.Sprintf("league:%d:gw:%d:page:%d", scope.SourceID, gameweek, page), Stage: "league-standings", Endpoint: endpoint, Checkpoint: map[string]any{"page": page}}}); err != nil {
+		if err := s.Repository.EnqueueManagerWork(ctx, runID, []ManagerWorkItem{{NaturalKey: key, Stage: "league-standings", Endpoint: endpoint, Checkpoint: map[string]any{"page": page}}}); err != nil {
 			return err
 		}
 		value, checksum, fetched, err := s.Source.League(ctx, scope.SourceID, page, 1)
 		if err != nil {
+			_ = s.Repository.UpdateManagerWork(ctx, runID, key, "retryable", err.Error())
 			return err
 		}
 		if err = s.Repository.PersistLeaguePage(ctx, userID, seasonID, gameweek, 1, page, value, checksum, fetched); err != nil {
+			_ = s.Repository.UpdateManagerWork(ctx, runID, key, "retryable", err.Error())
 			return err
 		}
+		_ = s.Repository.UpdateManagerWork(ctx, runID, key, "completed", "")
+		for _, member := range value.Standings.Results {
+			allMembers = append(allMembers, LeagueMember{EntryID: member.Entry, EntryName: member.EntryName, PlayerName: member.PlayerName, Rank: member.Rank, LastRank: member.LastRank, Points: member.Total})
+		}
 		if !value.Standings.HasNext {
-			return nil
+			break
+		}
+		if page == max {
+			return fmt.Errorf("league page limit reached")
 		}
 	}
-	return fmt.Errorf("league page limit reached")
+	selected, _ := SelectLeagueMembers(allMembers, nil, 0, 0, scope.MemberLimit)
+	sem := make(chan struct{}, 4)
+	var wait sync.WaitGroup
+	var failureMu sync.Mutex
+	failures := []error{}
+	recordFailure := func(err error) {
+		failureMu.Lock()
+		failures = append(failures, err)
+		failureMu.Unlock()
+	}
+	for _, entryID := range selected {
+		entryID := entryID
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				recordFailure(ctx.Err())
+				return
+			}
+			key := fmt.Sprintf("league:%d:gw:%d:entry:%d:picks", scope.SourceID, gameweek, entryID)
+			endpoint := fmt.Sprintf("/entry/%d/event/%d/picks/", entryID, gameweek)
+			if err := s.Repository.EnqueueManagerWork(ctx, runID, []ManagerWorkItem{{NaturalKey: key, Stage: "league-member-picks", Endpoint: endpoint, Checkpoint: map[string]any{"entryId": entryID, "gameweek": gameweek}}}); err != nil {
+				recordFailure(err)
+				return
+			}
+			value, checksum, fetched, err := s.Source.Picks(ctx, entryID, gameweek)
+			if err == nil {
+				var snapshot int64
+				snapshot, err = s.Repository.PersistPicks(ctx, userID, seasonID, entryID, gameweek, value, checksum, fetched, endpoint)
+				if err == nil {
+					err = s.Repository.LinkLeagueMemberPick(ctx, userID, seasonID, scope.SourceID, gameweek, entryID, snapshot, "completed", "")
+				}
+			}
+			if err != nil {
+				if linkErr := s.Repository.LinkLeagueMemberPick(ctx, userID, seasonID, scope.SourceID, gameweek, entryID, 0, "failed", err.Error()); linkErr != nil {
+					err = errors.Join(err, linkErr)
+				}
+				_ = s.Repository.UpdateManagerWork(ctx, runID, key, "retryable", err.Error())
+				recordFailure(err)
+			} else {
+				if err = s.Repository.UpdateManagerWork(ctx, runID, key, "completed", ""); err != nil {
+					recordFailure(err)
+				}
+			}
+		}()
+	}
+	wait.Wait()
+	if len(failures) > 0 {
+		return fmt.Errorf("%d league member pick requests failed", len(failures))
+	}
+	return nil
 }
 
 func (s *ManagerService) Connect(ctx context.Context, userID int64, entryID int, cookie string) error {
@@ -199,9 +295,13 @@ func (s *ManagerService) Connect(ctx context.Context, userID int64, entryID int,
 	if err := s.Sessions.Put(ctx, userID, entryID, RemoteSession{Cookie: cookie}); err != nil {
 		return err
 	}
-	if _, _, _, err := s.Source.Me(ctx, RemoteSession{Cookie: cookie}); err != nil {
+	identity, _, _, err := s.Source.Me(ctx, RemoteSession{Cookie: cookie})
+	if err != nil || sourceMeEntry(identity) != entryID {
 		_ = s.Sessions.Revoke(ctx, userID, entryID)
-		return err
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("remote FPL session belongs to a different entry")
 	}
 	return s.Repository.UpsertManagerConnection(ctx, userID, entryID, "memory", RemoteConnected)
 }
@@ -222,15 +322,49 @@ func (s *ManagerService) PreviewImport(ctx context.Context, userID int64, season
 	return preview, true, err
 }
 
+func (s *ManagerService) Import(ctx context.Context, userID int64, seasonID, entryID, gameweek int, snapshotID int64, mode string, confirmed bool, domain *Store) (SquadImportResult, error) {
+	preview, found, err := s.PreviewImport(ctx, userID, seasonID, entryID, gameweek, domain)
+	if err != nil {
+		return SquadImportResult{}, err
+	}
+	if !found || preview.Snapshot.SnapshotID != snapshotID {
+		return SquadImportResult{}, fmt.Errorf("import snapshot is not the latest owned snapshot")
+	}
+	if len(preview.Validation) > 0 {
+		return SquadImportResult{}, fmt.Errorf("import snapshot fails planning validation")
+	}
+	if mode == "replace" && !confirmed {
+		return SquadImportResult{}, fmt.Errorf("replace confirmation is required")
+	}
+	return s.Repository.ImportActiveTeam(ctx, userID, seasonID, snapshotID, mode, preview.Proposed)
+}
+
 func (s *ManagerService) CompareLeague(ctx context.Context, userID int64, seasonID, leagueID, gameweek int, explicit []int, rankFrom, rankTo, limit int) (LeagueComparisonResult, error) {
 	members, err := s.Repository.LoadLeagueMembers(ctx, userID, seasonID, leagueID, gameweek)
 	if err != nil {
 		return LeagueComparisonResult{}, err
 	}
 	selected, omitted := SelectLeagueMembers(members, explicit, rankFrom, rankTo, limit)
-	result := LeagueComparisonResult{LeagueID: leagueID, SeasonID: seasonID, Gameweek: gameweek, SelectedIDs: selected, OmittedIDs: omitted}
+	result := LeagueComparisonResult{
+		LeagueID:      leagueID,
+		SeasonID:      seasonID,
+		Gameweek:      gameweek,
+		SelectedIDs:   nonNilInts(selected),
+		OmittedIDs:    nonNilInts(omitted),
+		Comparisons:   []TeamComparison{},
+		MissingInputs: []string{},
+		FailedMembers: []int{},
+		Ownership:     []PlayerOwnership{},
+	}
+	result.FailedMembers, err = s.Repository.LoadLeagueMemberFailures(ctx, userID, seasonID, leagueID, gameweek)
+	if err != nil {
+		return result, err
+	}
+	for _, entryID := range result.FailedMembers {
+		result.MissingInputs = append(result.MissingInputs, fmt.Sprintf("entry:%d:pick-sync-failed", entryID))
+	}
 	if len(selected) < 2 {
-		result.MissingInputs = []string{"at-least-two-member-pick-snapshots"}
+		result.MissingInputs = append(result.MissingInputs, "at-least-two-member-pick-snapshots")
 		return result, nil
 	}
 	points, state, err := s.Repository.LoadPlayerGameweekPoints(ctx, seasonID, gameweek)
@@ -241,26 +375,43 @@ func (s *ManagerService) CompareLeague(ctx context.Context, userID int64, season
 	if state == "estimated" {
 		result.AlgorithmVersion = "league-points-estimate-v1"
 	}
-	base, err := s.Repository.LoadManagerPicks(ctx, userID, seasonID, selected[0], gameweek)
-	if err != nil {
-		return result, err
-	}
-	if len(base) == 0 {
-		result.MissingInputs = append(result.MissingInputs, fmt.Sprintf("entry:%d:picks", selected[0]))
-	}
-	for _, entryID := range selected[1:] {
-		picks, pickErr := s.Repository.LoadManagerPicks(ctx, userID, seasonID, entryID, gameweek)
+	analyses := []ManagerDecisionAnalysis{}
+	ownership := map[int]int{}
+	for _, entryID := range selected {
+		analysis, pickErr := s.Repository.LoadManagerDecisionAnalysis(ctx, userID, seasonID, entryID, gameweek)
 		if pickErr != nil {
 			return result, pickErr
 		}
-		if len(picks) == 0 {
+		if len(analysis.Picks) == 0 {
 			result.MissingInputs = append(result.MissingInputs, fmt.Sprintf("entry:%d:picks", entryID))
 			continue
 		}
-		left, right := CompareTeams(base, picks, points, 0, state)
-		left.EntryID = selected[0]
-		right.EntryID = entryID
-		result.Comparisons = append(result.Comparisons, left, right)
+		analyses = append(analyses, analysis)
+		if analysis.SourceFetchedAt.After(result.SourceSnapshotAt) {
+			result.SourceSnapshotAt = analysis.SourceFetchedAt
+		}
+		for _, pick := range analysis.Picks {
+			ownership[pick.PlayerID]++
+		}
 	}
+	for i := 0; i < len(analyses); i++ {
+		for j := i + 1; j < len(analyses); j++ {
+			left, right := CompareTeamsWithCosts(analyses[i].Picks, analyses[j].Picks, points, analyses[i].TransferCost, analyses[j].TransferCost, state)
+			left.EntryID, left.OpponentEntryID = analyses[i].EntryID, analyses[j].EntryID
+			right.EntryID, right.OpponentEntryID = analyses[j].EntryID, analyses[i].EntryID
+			result.Comparisons = append(result.Comparisons, left, right)
+		}
+	}
+	for playerID, count := range ownership {
+		result.Ownership = append(result.Ownership, PlayerOwnership{PlayerID: playerID, Count: count, Rate: float64(count) / float64(len(analyses))})
+	}
+	sort.Slice(result.Ownership, func(i, j int) bool { return result.Ownership[i].PlayerID < result.Ownership[j].PlayerID })
 	return result, nil
+}
+
+func nonNilInts(values []int) []int {
+	if values == nil {
+		return []int{}
+	}
+	return values
 }

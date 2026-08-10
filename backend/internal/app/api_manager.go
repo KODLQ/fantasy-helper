@@ -66,7 +66,11 @@ func (a *API) managerEntryData(w http.ResponseWriter, r *http.Request) {
 			writeContractError(w, 503, requestIDFrom(w), "manager_unavailable", "Manager history is unavailable.", true, nil)
 			return
 		}
-		writeEnvelope(w, 200, requestIDFrom(w), scope, fresh, map[string]any{"items": items})
+		from, to := 0, 0
+		if len(items) > 0 {
+			from, to = items[0].Gameweek, items[len(items)-1].Gameweek
+		}
+		writeEnvelope(w, 200, requestIDFrom(w), scope, fresh, map[string]any{"items": items, "range": map[string]any{"gameweekFrom": from, "gameweekTo": to, "count": len(items)}})
 	case "transfers":
 		items, err := service.Repository.LoadManagerTransfers(r.Context(), session.User.ID, seasonID, entryID)
 		if err != nil {
@@ -87,6 +91,36 @@ func (a *API) managerEntryData(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeEnvelope(w, 200, requestIDFrom(w), scope, fresh, map[string]any{"items": items})
+	case "analysis":
+		gameweek := parseInt(r.URL.Query().Get("gameweek"), 0)
+		if gameweek <= 0 {
+			writeContractError(w, 422, requestIDFrom(w), "manager_scope_required", "gameweek is required for analysis.", false, nil)
+			return
+		}
+		scope.Gameweek = gameweek
+		item, err := service.Repository.LoadManagerDecisionAnalysis(r.Context(), session.User.ID, seasonID, entryID, gameweek)
+		if err != nil {
+			writeContractError(w, 503, requestIDFrom(w), "manager_unavailable", "Manager analysis is unavailable.", true, nil)
+			return
+		}
+		writeEnvelope(w, 200, requestIDFrom(w), scope, fresh, item)
+	case "active-team":
+		gameweek := parseInt(r.URL.Query().Get("gameweek"), 0)
+		if gameweek <= 0 {
+			writeContractError(w, 422, requestIDFrom(w), "manager_scope_required", "gameweek is required for active-team snapshots.", false, nil)
+			return
+		}
+		scope.Gameweek = gameweek
+		item, found, err := service.Repository.LoadActiveTeam(r.Context(), session.User.ID, seasonID, entryID, gameweek)
+		if err != nil {
+			writeContractError(w, 503, requestIDFrom(w), "manager_unavailable", "Active-team snapshot is unavailable.", true, nil)
+			return
+		}
+		if !found {
+			writeContractError(w, 404, requestIDFrom(w), "active_team_not_found", "No synchronized active team was found.", false, nil)
+			return
+		}
+		writeEnvelope(w, 200, requestIDFrom(w), scope, fresh, item)
 	default:
 		writeContractError(w, 404, requestIDFrom(w), "manager_route_not_found", "Manager dataset was not found.", false, nil)
 	}
@@ -174,6 +208,43 @@ func (a *API) squadImportPreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeEnvelope(w, 200, requestIDFrom(w), Scope{SeasonID: seasonID, Gameweek: gameweek, Dataset: "manager-fpl"}, service.Status(session.User.ID).Freshness, preview)
+}
+
+func (a *API) squadImport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeContractError(w, 405, requestIDFrom(w), "method_not_allowed", "Use POST to import an active team.", false, nil)
+		return
+	}
+	service, session, ok := a.requireManager(w, r)
+	if !ok {
+		return
+	}
+	if _, ok = a.requireMutationAuth(w, r); !ok {
+		return
+	}
+	var input struct {
+		SeasonID       int    `json:"seasonId"`
+		EntryID        int    `json:"entryId"`
+		Gameweek       int    `json:"gameweek"`
+		SnapshotID     int64  `json:"snapshotId"`
+		Mode           string `json:"mode"`
+		ConfirmReplace bool   `json:"confirmReplace"`
+	}
+	if json.NewDecoder(r.Body).Decode(&input) != nil || input.SeasonID <= 0 || input.EntryID <= 0 || input.Gameweek <= 0 || input.SnapshotID <= 0 || (input.Mode != "draft" && input.Mode != "replace") {
+		writeContractError(w, 422, requestIDFrom(w), "invalid_import", "Season, entry, gameweek, snapshot, and mode are required.", false, nil)
+		return
+	}
+	domain, err := a.requestDomainStoreForUser(r.Context(), input.SeasonID, session.User.ID)
+	if err != nil {
+		writeContractError(w, 503, requestIDFrom(w), "planning_unavailable", "Planning data is unavailable.", true, nil)
+		return
+	}
+	result, err := service.Import(r.Context(), session.User.ID, input.SeasonID, input.EntryID, input.Gameweek, input.SnapshotID, input.Mode, input.ConfirmReplace, domain)
+	if err != nil {
+		writeContractError(w, 422, requestIDFrom(w), "import_validation_failed", err.Error(), false, nil)
+		return
+	}
+	writeEnvelope(w, 200, requestIDFrom(w), Scope{SeasonID: input.SeasonID, Gameweek: input.Gameweek, Dataset: "manager-fpl"}, service.Status(session.User.ID).Freshness, result)
 }
 
 func parseCSVInts(value string) []int {
@@ -307,11 +378,15 @@ func (a *API) managerSync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	status, err := service.Sync(r.Context(), session.User.ID, input.SeasonID, input.Gameweek, requestIDFrom(w))
-	if err != nil && status.CompletedWork == 0 {
+	if err != nil && status.RunID == 0 {
 		writeContractError(w, 502, requestIDFrom(w), "manager_sync_failed", "Manager synchronization failed.", true, map[string]any{"status": status})
 		return
 	}
-	writeEnvelopeWithWarnings(w, 200, requestIDFrom(w), Scope{SeasonID: input.SeasonID, Gameweek: input.Gameweek, Dataset: "manager-fpl"}, status.Freshness, status.Freshness.Warnings, status)
+	warnings := append([]string(nil), status.Freshness.Warnings...)
+	if status.Warning != "" {
+		warnings = append(warnings, status.Warning)
+	}
+	writeEnvelopeWithWarnings(w, 200, requestIDFrom(w), Scope{SeasonID: input.SeasonID, Gameweek: input.Gameweek, Dataset: "manager-fpl"}, status.Freshness, warnings, status)
 }
 
 func (a *API) managerExport(w http.ResponseWriter, r *http.Request) {

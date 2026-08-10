@@ -93,9 +93,19 @@ Season-dependent version-one endpoints accept `seasonId` and echo the resolved v
 
 To diagnose scope problems, inspect `/api/v1/seasons`, the response `meta.scope`, freshness/missing-input fields, and the latest `/api/v1/sync/status`. Roll back the application by deploying the previous backend/frontend while preserving normalized season data. Apply the migration down file only when no newer migration or imported data depends on its columns; removing a historical season is intentionally not part of application rollback.
 
+## Manager and league synchronization
+
+Authenticated local users can configure FPL entry and classic-league IDs from **Manager & leagues**. Public entry history, transfers, gameweek picks, and paginated classic-league standings sync without an FPL login. A selected gameweek and the configured member limit bound league fan-out; the worker fetches at most four member pick snapshots concurrently and retains successful pages/members when another request fails.
+
+The optional FPL session field enables `/me/` and `/my-team/{entryId}/` for the exact active squad, bank, value, and chip state. Paste an existing FPL session cookie or access token into that password field. JWT-shaped values are sent as bearer tokens; cookie strings are sent only as cookies. The credential is accepted only when `/me/` returns the configured entry, is held in process memory, is cleared from the browser field immediately, and is never stored in PostgreSQL, browser storage, responses, source payloads, diagnostics, or errors. Restarting the backend or disconnecting requires the credential to be supplied again. Each connection and every normalized manager record belongs to one local user; private export/deletion endpoints do not alter shared public facts.
+
+Synchronization is read-only against FPL: it never logs in with an FPL password, executes transfers, changes captaincy, or mutates an FPL team. The synchronized active team remains separate from the planning squad. Import creates a new draft by default; replacing the saved planning squad requires a preview and explicit confirmation and is committed atomically. Actual finalized points, provisional live points, and form-based future estimates are labeled separately. Estimates are research signals, not official FPL points. The comparison UI selects up to eight managers at once; larger leagues should be researched in bounded subsets.
+
+Manager data is retained as normalized season/gameweek facts until the owning user invokes private-data deletion or the deployment applies its configured retention policy. No raw private response body is persisted. Disconnect revokes only the in-memory remote session and retains previously synchronized facts for analysis.
+
 ## Data and recommendation limits
 
-The application uses local multi-user accounts but does not yet authenticate to an FPL account, execute transfers, or access private leagues. FPL remote-session handling arrives in the dependent manager/league sync change; local passwords are never FPL credentials. The source sync keeps the last known good normalized snapshot when a stage fails. The recommendation is a documented heuristic using form, expected minutes, fixture difficulty, recent returns, and value; it is not a guaranteed point projection.
+Local passwords are never FPL credentials. The source sync keeps the last known good normalized snapshot when a stage fails. The recommendation is a documented heuristic using form, expected minutes, fixture difficulty, recent returns, and value; it is not a guaranteed point projection.
 
 Upstream-shape fixtures for adapter tests live in `backend/testdata`. Keep them sanitized and update the adapter when the official response shape changes.
 
@@ -108,8 +118,8 @@ cd frontend && npm run verify
 # with the local stack already running
 sh scripts/smoke.sh
 
-# optional PostgreSQL persistence integration test
-cd backend && TEST_DATABASE_URL='postgres://fantasy:fantasy@localhost:5432/fantasy_helper_test?sslmode=disable' go test ./internal/app -run TestPostgresRepositoryPersistence -v
+# optional PostgreSQL persistence and manager/league integration tests
+cd backend && TEST_DATABASE_URL='postgres://fantasy:fantasy@localhost:5432/fantasy_helper_test?sslmode=disable' go test ./internal/app -run 'TestPostgresRepositoryPersistence|TestManagerLeagueSyncImportAnalysisAndPrivacyIntegration' -v
 ```
 
 ### Browser acceptance tests

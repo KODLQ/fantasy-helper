@@ -72,6 +72,26 @@ func TestManagerSourceUsesSessionOnlyAtTransportBoundaryAndRedactsErrors(t *test
 	}
 }
 
+func TestManagerSourceUsesBearerTokensAndRejectsUnauthenticatedMeResponses(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Header.Get("Authorization") == "Bearer header.payload.signature" {
+			_, _ = w.Write([]byte(`{"player":{"entry":91}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"player":null}`))
+	}))
+	defer server.Close()
+	source := NewManagerSource(server.URL, server.Client())
+	identity, _, _, err := source.Me(context.Background(), RemoteSession{Cookie: "header.payload.signature"})
+	if err != nil || sourceMeEntry(identity) != 91 {
+		t.Fatalf("identity=%#v err=%v", identity, err)
+	}
+	if _, _, _, err = source.Me(context.Background(), RemoteSession{Cookie: "sessionid=invalid"}); err == nil || !strings.Contains(err.Error(), "unauthenticated") {
+		t.Fatalf("unauthenticated response error=%v", err)
+	}
+}
+
 func TestManagerSourcePublicAdaptersAndLeaguePagination(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -114,6 +134,65 @@ func TestManagerSourcePublicAdaptersAndLeaguePagination(t *testing.T) {
 	}
 }
 
+func TestManagerSourceClassifiesSanitizedFailureFixtures(t *testing.T) {
+	tests := []struct {
+		name       string
+		status     int
+		body       string
+		wantCode   string
+		wantSource bool
+	}{
+		{name: "missing", status: http.StatusNotFound, body: `{"detail":"not found"}`, wantCode: "not_found", wantSource: true},
+		{name: "unauthorized", status: http.StatusUnauthorized, body: `{"detail":"session expired"}`, wantCode: "reauth_required", wantSource: true},
+		{name: "permission", status: http.StatusForbidden, body: `{"detail":"private league"}`, wantCode: "permission_denied", wantSource: true},
+		{name: "invalid", status: http.StatusOK, body: `{`, wantCode: "invalid"},
+		{name: "partial", status: http.StatusOK, body: `{"id":7}`, wantCode: "incomplete"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(test.status)
+				_, _ = w.Write([]byte(test.body))
+			}))
+			defer server.Close()
+			_, _, _, err := NewManagerSource(server.URL, server.Client()).Entry(context.Background(), 7)
+			if err == nil || strings.Contains(err.Error(), test.body) {
+				t.Fatalf("unsafe or missing error: %v", err)
+			}
+			if test.wantSource {
+				var sourceErr ManagerSourceError
+				if !errors.As(err, &sourceErr) || sourceErr.Code != test.wantCode {
+					t.Fatalf("classified error=%v", err)
+				}
+			} else if !strings.Contains(err.Error(), test.wantCode) {
+				t.Fatalf("error=%v", err)
+			}
+		})
+	}
+}
+
+func TestManagerSourceSupportsClosedMultiPageLeagueFixtures(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		page := r.URL.Query().Get("page_standings")
+		if page == "2" {
+			_, _ = w.Write([]byte(`{"league":{"id":8,"name":"Closed research","closed":true},"standings":{"page":2,"has_next":false,"results":[{"entry":3,"entry_name":"C","rank":3,"total":90}]}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"league":{"id":8,"name":"Closed research","closed":true},"standings":{"page":1,"has_next":true,"results":[{"entry":1,"entry_name":"A","rank":1,"total":100},{"entry":2,"entry_name":"B","rank":2,"total":95}]}}`))
+	}))
+	defer server.Close()
+	source := NewManagerSource(server.URL, server.Client())
+	first, _, _, err := source.League(context.Background(), 8, 1, 1)
+	if err != nil || !first.League.Closed || !first.Standings.HasNext || len(first.Standings.Results) != 2 {
+		t.Fatalf("first=%#v err=%v", first, err)
+	}
+	second, _, _, err := source.League(context.Background(), 8, 2, 1)
+	if err != nil || second.Standings.HasNext || len(second.Standings.Results) != 1 {
+		t.Fatalf("second=%#v err=%v", second, err)
+	}
+}
+
 func TestDeterministicMemberSelectionAndComparisonFormulas(t *testing.T) {
 	members := []LeagueMember{{EntryID: 3, Rank: 2}, {EntryID: 2, Rank: 1}, {EntryID: 1, Rank: 1}}
 	selected, omitted := SelectLeagueMembers(members, nil, 0, 0, 2)
@@ -124,6 +203,10 @@ func TestDeterministicMemberSelectionAndComparisonFormulas(t *testing.T) {
 	if left.Overlap != 1.0/3.0 || left.NetPoints != 10 || right.NetPoints != 9 || left.PointDifference != 1 || right.PointDifference != -1 {
 		t.Fatalf("left=%#v right=%#v", left, right)
 	}
+	left, right = CompareTeamsWithCosts([]ManagerPick{{PlayerID: 1, Multiplier: 2}}, []ManagerPick{{PlayerID: 1, Multiplier: 1}}, map[int]int{1: 5}, 4, 0, "provisional")
+	if left.NetPoints != 6 || right.NetPoints != 5 || left.PointDifference != 1 || left.OutcomeState != "provisional" {
+		t.Fatalf("cost comparison left=%#v right=%#v", left, right)
+	}
 }
 
 func TestExpiredMemorySessionRequiresReauthentication(t *testing.T) {
@@ -131,6 +214,37 @@ func TestExpiredMemorySessionRequiresReauthentication(t *testing.T) {
 	_ = p.Put(context.Background(), 1, 2, RemoteSession{Cookie: "x", ExpiresAt: time.Now().Add(-time.Minute)})
 	if _, err := p.Get(context.Background(), 1, 2); !errors.Is(err, ErrRemoteReauthRequired) {
 		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestActiveTeamConflictDetectionPreservesSourceDisagreement(t *testing.T) {
+	var team sourceMyTeam
+	team.Picks = append(team.Picks, struct {
+		Element       int  `json:"element"`
+		Position      int  `json:"position"`
+		Multiplier    int  `json:"multiplier"`
+		IsCaptain     bool `json:"is_captain"`
+		IsViceCaptain bool `json:"is_vice_captain"`
+		PurchasePrice int  `json:"purchase_price"`
+		SellingPrice  int  `json:"selling_price"`
+	}{Element: 1, Position: 1, Multiplier: 2, IsCaptain: true})
+	var picks sourcePicks
+	picks.Picks = append(picks.Picks, struct {
+		Element       int  `json:"element"`
+		Position      int  `json:"position"`
+		Multiplier    int  `json:"multiplier"`
+		IsCaptain     bool `json:"is_captain"`
+		IsViceCaptain bool `json:"is_vice_captain"`
+		PurchasePrice int  `json:"purchase_price"`
+		SellingPrice  int  `json:"selling_price"`
+	}{Element: 1, Position: 1, Multiplier: 1})
+	if sourceTeamMatchesPicks(team, picks) {
+		t.Fatal("captaincy disagreement was treated as matching")
+	}
+	picks.Picks[0].Multiplier = 2
+	picks.Picks[0].IsCaptain = true
+	if !sourceTeamMatchesPicks(team, picks) {
+		t.Fatal("identical source selections were treated as conflicted")
 	}
 }
 

@@ -290,6 +290,9 @@ func (s *Store) ExportSnapshot() Snapshot {
 	for _, player := range s.players {
 		players = append(players, player)
 	}
+	sort.Slice(weeks, func(i, j int) bool { return weeks[i].ID < weeks[j].ID })
+	sort.Slice(teams, func(i, j int) bool { return teams[i].ID < teams[j].ID })
+	sort.Slice(players, func(i, j int) bool { return players[i].ID < players[j].ID })
 	histories := map[int][]PlayerHistory{}
 	for id, items := range s.history {
 		histories[id] = append([]PlayerHistory{}, items...)

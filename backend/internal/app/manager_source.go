@@ -147,14 +147,12 @@ type sourceLeagueStandings struct {
 	} `json:"standings"`
 }
 
-func (s *ManagerSource) get(ctx context.Context, path, cookie string, target any) (string, time.Time, error) {
+func (s *ManagerSource) get(ctx context.Context, path, credential string, target any) (string, time.Time, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.BaseURL+path, nil)
 	if err != nil {
 		return "", time.Time{}, err
 	}
-	if cookie != "" {
-		req.Header.Set("Cookie", cookie)
-	}
+	applyRemoteCredential(req, credential)
 	response, err := s.Client.Do(req)
 	if err != nil {
 		return "", time.Time{}, fmt.Errorf("FPL manager source transport failed")
@@ -183,9 +181,28 @@ func (s *ManagerSource) get(ctx context.Context, path, cookie string, target any
 	return fmt.Sprintf("%x", sha256.Sum256(body)), time.Now().UTC(), nil
 }
 
+func applyRemoteCredential(req *http.Request, credential string) {
+	credential = strings.TrimSpace(credential)
+	if credential == "" {
+		return
+	}
+	if strings.HasPrefix(strings.ToLower(credential), "bearer ") {
+		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(credential[len("bearer "):]))
+		return
+	}
+	if strings.Count(credential, ".") == 2 && !strings.Contains(credential, "=") && !strings.ContainsAny(credential, "; ") {
+		req.Header.Set("Authorization", "Bearer "+credential)
+		return
+	}
+	req.Header.Set("Cookie", credential)
+}
+
 func (s *ManagerSource) Entry(ctx context.Context, entryID int) (sourceEntry, string, time.Time, error) {
 	var v sourceEntry
 	c, t, e := s.get(ctx, fmt.Sprintf("/entry/%d/", entryID), "", &v)
+	if e == nil && (v.ID <= 0 || v.Name == "") {
+		e = fmt.Errorf("FPL manager source response is incomplete")
+	}
 	return v, c, t, e
 }
 func (s *ManagerSource) History(ctx context.Context, entryID int) (sourceEntryHistory, string, time.Time, error) {
@@ -201,17 +218,38 @@ func (s *ManagerSource) Transfers(ctx context.Context, entryID int) ([]sourceTra
 func (s *ManagerSource) Picks(ctx context.Context, entryID, gameweek int) (sourcePicks, string, time.Time, error) {
 	var v sourcePicks
 	c, t, e := s.get(ctx, fmt.Sprintf("/entry/%d/event/%d/picks/", entryID, gameweek), "", &v)
+	if e == nil && (v.EntryHistory.Event != gameweek || len(v.Picks) == 0) {
+		e = fmt.Errorf("FPL manager source response is incomplete")
+	}
 	return v, c, t, e
 }
 func (s *ManagerSource) MyTeam(ctx context.Context, entryID int, session RemoteSession) (sourceMyTeam, string, time.Time, error) {
 	var v sourceMyTeam
 	c, t, e := s.get(ctx, fmt.Sprintf("/my-team/%d/", entryID), session.Cookie, &v)
+	if e == nil && len(v.Picks) == 0 {
+		e = fmt.Errorf("FPL manager source response is incomplete")
+	}
 	return v, c, t, e
 }
 func (s *ManagerSource) Me(ctx context.Context, session RemoteSession) (map[string]any, string, time.Time, error) {
 	var v map[string]any
 	c, t, e := s.get(ctx, "/me/", session.Cookie, &v)
+	if e == nil && sourceMeEntry(v) <= 0 {
+		e = fmt.Errorf("FPL manager source response is unauthenticated")
+	}
 	return v, c, t, e
+}
+
+func sourceMeEntry(value map[string]any) int {
+	player, ok := value["player"].(map[string]any)
+	if !ok {
+		return 0
+	}
+	entry, ok := player["entry"].(float64)
+	if !ok || entry <= 0 {
+		return 0
+	}
+	return int(entry)
 }
 func (s *ManagerSource) League(ctx context.Context, leagueID, page, phase int) (sourceLeagueStandings, string, time.Time, error) {
 	if page < 1 {
@@ -223,5 +261,8 @@ func (s *ManagerSource) League(ctx context.Context, leagueID, page, phase int) (
 	query := url.Values{"page_standings": {strconv.Itoa(page)}, "phase": {strconv.Itoa(phase)}}
 	var v sourceLeagueStandings
 	c, t, e := s.get(ctx, fmt.Sprintf("/leagues-classic/%d/standings/?%s", leagueID, query.Encode()), "", &v)
+	if e == nil && (v.League.ID != leagueID || v.Standings.Page != page) {
+		e = fmt.Errorf("FPL manager source response is incomplete")
+	}
 	return v, c, t, e
 }
