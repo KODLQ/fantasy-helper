@@ -81,12 +81,14 @@ test.describe('application buttons', () => {
     await expect(page.getByRole('heading', { name: 'Player research' })).toBeVisible();
   });
 
-  test('drawer add-to-squad button opens the planning workspace', async ({ page }) => {
+  test('drawer add-to-squad button starts a planning draft with that player', async ({ page }) => {
     await openApp(page);
     await page.getByRole('button', { name: 'Inspect player' }).first().click();
-    await page.getByTestId('player-drawer').getByRole('button', { name: 'Open squad planner' }).click();
+    const playerName = (await page.getByTestId('player-drawer').getByRole('heading').first().textContent()) ?? '';
+    await page.getByTestId('player-drawer').getByRole('button', { name: 'Add to squad' }).click();
     await expect(page.getByRole('heading', { name: 'Squad planner' })).toBeVisible();
-    await expect(page.getByText('Squad planner opened. Player transfers are not available in this workspace yet.')).toBeVisible();
+    await expect(page.getByText('Squad planner opened.')).toBeVisible();
+    await expect(page.getByTestId('squad-builder')).toContainText(playerName);
   });
 
   test('squad and recommendation action buttons work', async ({ page }) => {

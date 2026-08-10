@@ -2,16 +2,44 @@ import { expect, test } from '@playwright/test';
 import { loadDemoSquad, openApp } from './helpers';
 
 test.describe('squad planning and recommendations', () => {
+  test('creates and persists a complete team through the player picker', async ({ page }) => {
+    await openApp(page);
+    await page.locator('nav').getByRole('button', { name: 'Squad planner' }).click();
+    const builder = page.getByTestId('squad-builder');
+    await expect(builder).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Create team' })).toBeDisabled();
+
+    for (const name of ['Stone', 'Grant', 'Bell', 'Cole', 'Price', 'Lane', 'Vale', 'Mason', 'Reed', 'Fox', 'King', 'Hart', 'Young', 'Miles', 'West']) {
+      await builder.getByLabel('Search squad players').fill(name);
+      const row = builder.locator('.picker-player').filter({ hasText: name });
+      await expect(row).toHaveCount(1);
+      await row.getByRole('button', { name: 'Add' }).click();
+    }
+
+    await expect(page.getByTestId('squad-summary')).toContainText('15/15');
+    await page.getByLabel('Team name').fill('My hand-built team');
+    await page.getByRole('button', { name: 'Create team' }).click();
+    await expect(builder.getByRole('status')).toContainText('Squad saved');
+    await page.reload();
+    await page.locator('nav').getByRole('button', { name: 'Squad planner' }).click();
+    await expect(page.getByLabel('Team name')).toHaveValue('My hand-built team');
+    await expect(page.getByTestId('squad-summary')).toContainText('15/15');
+  });
+
   test('loads a valid squad and saves lineup controls', async ({ page }) => {
     await openApp(page);
     await loadDemoSquad(page);
 
     const controls = page.locator('.lineup-controls');
     await expect(controls).toContainText('Lineup controls');
-    await controls.locator('select').nth(0).selectOption('3-4-3');
+    await controls.locator('select').nth(0).selectOption('4-4-2');
+    const saveResponse = page.waitForResponse((response) => response.url().includes('/api/v1/squad') && response.request().method() === 'PUT');
     await controls.getByRole('button', { name: 'Save lineup' }).click();
+    const response = await saveResponse;
+    expect(response.status()).toBe(200);
+    expect((await response.json()).data.formation).toBe('4-4-2');
     await expect(page.getByTestId('squad-summary')).toContainText('15/15');
-    await expect(page.getByTestId('squad-summary')).toContainText('3-4-3');
+    await expect(page.getByTestId('squad-summary')).toContainText('4-4-2');
     await expect(controls.getByRole('combobox', { name: 'Formation' }).locator('option')).toHaveCount(8);
   });
 
