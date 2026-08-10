@@ -2,7 +2,7 @@
 
 The public warehouse provides season, player, fixture, and gameweek facts but not the decisions made by a manager or the context of a league. The Postman collection documents public manager entry endpoints for summaries, history, transfers, and picks, plus cookie-authenticated `/me/` and `/my-team/{team_id}/` endpoints and paginated classic-league standings. This change depends on the public warehouse's season, gameweek, player, and team identities.
 
-The application is currently local-first and single-user. The design must be useful without requiring an FPL login, while making authenticated data possible without storing raw session cookies in ordinary database rows or diagnostics.
+The application is local-first with local multi-user authentication. The design must be useful without requiring an FPL login, while making authenticated data possible without storing raw session cookies in ordinary database rows or diagnostics.
 
 ## Goals / Non-Goals
 
@@ -20,7 +20,7 @@ The application is currently local-first and single-user. The design must be use
 
 - Executing transfers, changing a team, or mutating any FPL account.
 - Supporting arbitrary social/private-league discovery in the first release.
-- Building multi-user authentication and authorization for the application.
+- Changing the local authentication lifecycle or authorization model supplied by `local-user-authentication`.
 - Storing reusable plaintext FPL passwords or raw cookies in PostgreSQL.
 
 ## Decisions
@@ -62,7 +62,7 @@ The first local provider is `memory` or an OS/environment secret reference. If a
 Remote session lifecycle:
 
 1. The user explicitly supplies a session through the configured provider and associates it with an entry ID.
-2. The provider validates `/me/` or `/my-team/{entryId}/` and records only redacted status/provenance.
+2. The provider sends cookie strings as cookies and JWT-shaped credentials as bearer tokens, validates that `/me/` returns the configured entry rather than merely returning HTTP 200, and records only redacted status/provenance.
 3. A 401/403 marks the connection `reauth_required` or `permission_denied`, stops private retries, retains prior manager facts, and leaves public sync unaffected.
 4. Logout/disconnect/revocation removes the secret from the provider and deletes or anonymizes private connection metadata according to retention policy.
 5. A manager response and all derived private records are scoped by the local owner; another local user cannot infer the existence or status of the connection.
@@ -94,6 +94,8 @@ The initial API contract is:
 - `GET /api/v1/manager/entries/{entryId}/history?seasonId=` — gameweek history.
 - `GET /api/v1/manager/entries/{entryId}/picks?seasonId=&gameweek=` — synchronized picks.
 - `GET /api/v1/manager/entries/{entryId}/transfers?seasonId=` — transfer history.
+- `GET /api/v1/manager/entries/{entryId}/analysis?seasonId=&gameweek=` — point, captaincy, bench, chip, and transfer-cost decision analysis.
+- `GET /api/v1/manager/entries/{entryId}/active-team?seasonId=&gameweek=` — latest owned synchronized active-team snapshot.
 - `GET /api/v1/manager/leagues/{leagueId}/standings?seasonId=&gameweek=&page=` — standings page.
 - `GET /api/v1/manager/leagues/{leagueId}/comparison?seasonId=&gameweek=&entryIds=` — comparison view.
 - `GET /api/v1/squad/import/preview?entryId=&seasonId=&gameweek=` — non-mutating planning import preview.
