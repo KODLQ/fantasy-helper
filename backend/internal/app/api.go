@@ -973,7 +973,7 @@ func (a *API) playerDetail(w http.ResponseWriter, r *http.Request, seasonID, id 
 		return
 	}
 	freshness := a.Store.Freshness()
-	writeEnvelopeWithWarnings(w, http.StatusOK, w.Header().Get("X-Request-ID"), scope, freshness, warnings, map[string]interface{}{"player": player, "team": team, "history": a.Store.History(id), "fixtures": a.Store.UpcomingFixtures(player.TeamID), "freshness": freshness})
+	writeEnvelopeWithWarnings(w, http.StatusOK, w.Header().Get("X-Request-ID"), scope, freshness, warnings, map[string]interface{}{"player": player, "team": team, "history": a.Store.History(id), "fixtures": a.Store.UpcomingFixtures(player.TeamID), "fixtureContext": a.Store.FixtureContext(player), "freshness": freshness})
 }
 func (a *API) compare(w http.ResponseWriter, r *http.Request) {
 	season, warnings, err := a.resolveSeason(r.Context(), parseInt(r.URL.Query().Get("seasonId"), 0))

@@ -1,7 +1,89 @@
 import { useEffect, useMemo, useState } from 'react';
-import { api, Player, positionName, Squad } from '../api';
+import { api, apiErrorMessage, Player, positionName, Squad } from '../api';
 import '../interactive.css';
 
-export function SquadPlanner({ seasonId, onRecommend, onLoadDemo }: { seasonId: number; onRecommend: () => void; onLoadDemo: () => Promise<void> }) { const [squad, setSquad] = useState<Squad | null>(null); const [error, setError] = useState(''); useEffect(() => { const controller = new AbortController(); setSquad(null); api.squad(seasonId, controller.signal).then(setSquad).catch((reason) => { if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : 'Could not load squad.'); }); return () => controller.abort(); }, [seasonId]); const positions = useMemo(() => ({ 1: squad?.players.filter((player) => player.position === 1) ?? [], 2: squad?.players.filter((player) => player.position === 2) ?? [], 3: squad?.players.filter((player) => player.position === 3) ?? [], 4: squad?.players.filter((player) => player.position === 4) ?? [] }), [squad]); const loadDemo = async () => { try { await onLoadDemo(); setSquad(await api.squad(seasonId)); } catch (reason) { setError(reason instanceof Error ? reason.message : 'Could not load demo squad.'); } }; return <section className="page-section"><div className="section-heading compare-heading"><div><span className="eyebrow accent">PLANNING ROOM</span><h2>Your squad, your call.</h2><p className="section-subtitle">Make the constraints visible. Then let the model show its work.</p></div><div className="heading-actions"><button className="secondary-button" onClick={loadDemo}>Load demo squad</button><button className="primary-button" onClick={onRecommend}>Optimize lineup <span>→</span></button></div></div>{error && <div className="inline-error">{error}</div>}{squad && <><SquadControls seasonId={seasonId} squad={squad} onSaved={setSquad} /><div className="squad-summary" data-testid="squad-summary"><SummaryStat label="Players" value={`${squad.players.length}/15`} tone={squad.players.length === 15 ? 'good' : 'warn'} /><SummaryStat label="Squad cost" value={`£${squad.totalCost.toFixed(1)}`} /><SummaryStat label="Remaining" value={`£${squad.remainingBudget.toFixed(1)}`} tone={squad.remainingBudget >= 0 ? 'good' : 'bad'} /><SummaryStat label="Formation" value={squad.formation || 'Not set'} /></div>{squad.validation.length > 0 && <div className="validation-panel"><div><strong>Planning checks</strong><span>Complete the squad to unlock recommendations.</span></div><div className="validation-list">{squad.validation.slice(0, 5).map((item) => <span key={item.code}><i />{item.message}</span>)}</div></div>}<div className="pitch"><div className="pitch-label">SQUAD PLAYERS</div>{([1, 2, 3, 4] as const).map((position) => <div className="position-row" key={position}><span className="position-label">{positionName(position)}</span><div className="squad-players">{positions[position].map((player) => <div className="squad-player" key={player.id}><span className="player-avatar avatar-1">{player.webName.slice(0, 2).toUpperCase()}</span><strong>{player.webName}</strong><small>£{player.price.toFixed(1)}</small></div>)}{positions[position].length === 0 && <span className="empty-slot">No players selected</span>}</div></div>)}</div></>}</section>; }
-function SquadControls({ seasonId, squad, onSaved }: { seasonId: number; squad: Squad; onSaved: (squad: Squad) => void }) { const [formation, setFormation] = useState(squad.formation || '3-4-3'); const [captain, setCaptain] = useState(squad.captainId); const [viceCaptain, setViceCaptain] = useState(squad.viceCaptainId); const [saving, setSaving] = useState(false); const [error, setError] = useState(''); const starters = squad.players.filter((player) => squad.startingPlayerIds.includes(player.id)); const save = () => { setSaving(true); api.saveSquad(seasonId, { ...squad, formation, captainId: captain, viceCaptainId: viceCaptain }).then(onSaved).catch((reason) => setError(reason instanceof Error ? reason.message : 'Could not save lineup.')).finally(() => setSaving(false)); }; return <div className="lineup-controls"><div><strong>Lineup controls</strong><span>Set formation and armband choices.</span></div><label>Formation<select value={formation} onChange={(event) => setFormation(event.target.value)}><option>3-4-3</option><option>3-5-2</option><option>4-4-2</option><option>4-3-3</option><option>5-3-2</option></select></label><label>Captain<select value={captain} onChange={(event) => setCaptain(Number(event.target.value))}>{starters.map((player) => <option key={player.id} value={player.id}>{player.webName}</option>)}</select></label><label>Vice-captain<select value={viceCaptain} onChange={(event) => setViceCaptain(Number(event.target.value))}>{starters.map((player) => <option key={player.id} value={player.id}>{player.webName}</option>)}</select></label><button className="secondary-button" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save lineup'}</button>{error && <span className="control-error">{error}</span>}</div>; }
-function SummaryStat({ label, value, tone }: { label: string; value: string; tone?: string }) { return <div className="summary-stat"><span>{label}</span><strong className={tone ?? ''}>{value}</strong></div>; }
+export function SquadPlanner({ seasonId, onRecommend, onLoadDemo }: { seasonId: number; onRecommend: () => void; onLoadDemo: () => Promise<void> }) {
+  const [squad, setSquad] = useState<Squad | null>(null);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    const controller = new AbortController();
+    setSquad(null);
+    setError('');
+    api.squad(seasonId, controller.signal).then(setSquad).catch((reason) => {
+      if (!controller.signal.aborted) setError(apiErrorMessage(reason, 'Could not load squad.'));
+    });
+    return () => controller.abort();
+  }, [seasonId]);
+  const positions = useMemo(() => ({
+    1: squad?.players.filter((player) => player.position === 1) ?? [],
+    2: squad?.players.filter((player) => player.position === 2) ?? [],
+    3: squad?.players.filter((player) => player.position === 3) ?? [],
+    4: squad?.players.filter((player) => player.position === 4) ?? [],
+  }), [squad]);
+  const loadDemo = async () => {
+    try {
+      setError('');
+      await onLoadDemo();
+      setSquad(await api.squad(seasonId));
+    } catch (reason) {
+      setError(apiErrorMessage(reason, 'Could not load demo squad.'));
+    }
+  };
+  return <section className="page-section">
+    <div className="section-heading compare-heading"><div><span className="eyebrow accent">PLANNING ROOM</span><h2>Your squad, your call.</h2><p className="section-subtitle">Make the constraints visible. Then let the model show its work.</p></div><div className="heading-actions"><button className="secondary-button" onClick={loadDemo}>Load demo squad</button><button className="primary-button" onClick={onRecommend}>Optimize lineup <span>→</span></button></div></div>
+    {error && <div className="inline-error" role="alert">{error}</div>}
+    {squad && <>
+      <SquadControls seasonId={seasonId} squad={squad} onSaved={setSquad} />
+      <div className="squad-summary" data-testid="squad-summary"><SummaryStat label="Players" value={`${squad.players.length}/15`} tone={squad.players.length === 15 ? 'good' : 'warn'} /><SummaryStat label="Squad cost" value={`£${squad.totalCost.toFixed(1)}`} /><SummaryStat label="Remaining" value={`£${squad.remainingBudget.toFixed(1)}`} tone={squad.remainingBudget >= 0 ? 'good' : 'bad'} /><SummaryStat label="Formation" value={squad.formation || 'Not set'} /></div>
+      {squad.validation.length > 0 && <div className="validation-panel"><div><strong>Planning checks</strong><span>Complete the squad to unlock recommendations.</span></div><div className="validation-list">{squad.validation.slice(0, 5).map((item) => <span key={item.code}><i />{item.message}</span>)}</div></div>}
+      <div className="pitch"><div className="pitch-label">SQUAD PLAYERS</div>{([1, 2, 3, 4] as const).map((position) => <div className="position-row" key={position}><span className="position-label">{positionName(position)}</span><div className="squad-players">{positions[position].map((player) => <div className="squad-player" key={player.id}><span className="player-avatar avatar-1">{player.webName.slice(0, 2).toUpperCase()}</span><strong>{player.webName}</strong><small>£{player.price.toFixed(1)}</small></div>)}{positions[position].length === 0 && <span className="empty-slot">No players selected</span>}</div></div>)}</div>
+    </>}
+  </section>;
+}
+
+function SquadControls({ seasonId, squad, onSaved }: { seasonId: number; squad: Squad; onSaved: (squad: Squad) => void }) {
+  const [formation, setFormation] = useState(squad.formation || '3-4-3');
+  const [captain, setCaptain] = useState(squad.captainId);
+  const [viceCaptain, setViceCaptain] = useState(squad.viceCaptainId);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const starters = squad.players.filter((player) => squad.startingPlayerIds.includes(player.id));
+  const selectCaptain = (next: number) => {
+    setError('');
+    if (next === viceCaptain) setViceCaptain(captain);
+    setCaptain(next);
+  };
+  const selectViceCaptain = (next: number) => {
+    setError('');
+    if (next === captain) setCaptain(viceCaptain);
+    setViceCaptain(next);
+  };
+  const save = () => {
+    if (captain === viceCaptain) {
+      setError('Captain and vice-captain must be different starters.');
+      return;
+    }
+    setSaving(true);
+    setError('');
+    api.saveSquad(seasonId, { ...squad, formation, captainId: captain, viceCaptainId: viceCaptain })
+      .then(onSaved)
+      .catch((reason) => setError(apiErrorMessage(reason, 'Could not save lineup.')))
+      .finally(() => setSaving(false));
+  };
+  return <div className="lineup-controls">
+    <div><strong>Lineup controls</strong><span>Set formation and armband choices.</span></div>
+    <label>Formation<select aria-label="Formation" value={formation} onChange={(event) => { setFormation(event.target.value); setError(''); }}><option>3-4-3</option><option>3-5-2</option><option>4-5-1</option><option>4-4-2</option><option>4-3-3</option><option>5-4-1</option><option>5-3-2</option><option>5-2-3</option></select></label>
+    <label>Captain<select aria-label="Captain" value={captain} onChange={(event) => selectCaptain(Number(event.target.value))}>{starters.map((player) => <PlayerOption key={player.id} player={player} />)}</select></label>
+    <label>Vice-captain<select aria-label="Vice-captain" value={viceCaptain} onChange={(event) => selectViceCaptain(Number(event.target.value))}>{starters.map((player) => <PlayerOption key={player.id} player={player} />)}</select></label>
+    <button className="secondary-button" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save lineup'}</button>
+    {error && <span className="control-error" role="alert">{error}</span>}
+  </div>;
+}
+
+function PlayerOption({ player }: { player: Player }) {
+  return <option value={player.id}>{player.webName}</option>;
+}
+
+function SummaryStat({ label, value, tone }: { label: string; value: string; tone?: string }) {
+  return <div className="summary-stat"><span>{label}</span><strong className={tone ?? ''}>{value}</strong></div>;
+}

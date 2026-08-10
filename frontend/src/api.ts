@@ -65,7 +65,7 @@ export type LeagueComparison = { leagueId: number; seasonId: number; gameweek: n
 export type ValidationError = { code: string; rule: string; message: string; current?: unknown; required?: unknown; playerId?: number };
 export type Squad = { name: string; budget: number; players: Player[]; purchasePrices: Record<number, number>; startingPlayerIds: number[]; benchPlayerIds: number[]; captainId: number; viceCaptainId: number; formation: string; totalCost: number; remainingBudget: number; validation: ValidationError[] };
 export type RecommendationPlayer = { player: Player; score: number; factors: { name: string; signal: number; weight: number; contribution: number }[]; fixture: string; explanation: string };
-export type Recommendation = { algorithmVersion: string; weights: Record<string, number>; startingXI: RecommendationPlayer[]; bench: RecommendationPlayer[]; captain: RecommendationPlayer; viceCaptain: RecommendationPlayer; heuristicNotice: string; snapshotAt: string };
+export type Recommendation = { algorithmVersion: string; formation: string; weights: Record<string, number>; startingXI: RecommendationPlayer[]; bench: RecommendationPlayer[]; captain: RecommendationPlayer; viceCaptain: RecommendationPlayer; heuristicNotice: string; snapshotAt: string };
 
 export type RequestMeta = { requestId?: string; freshness?: Freshness; scope?: { seasonId?: number; gameweek?: number; dataset?: string }; warnings?: string[]; [key: string]: unknown };
 export class ApiError extends Error {
@@ -82,6 +82,14 @@ export class ApiError extends Error {
     this.requestId = requestId;
     this.details = details;
   }
+}
+
+export function apiErrorMessage(reason: unknown, fallback: string): string {
+  if (reason instanceof ApiError && Array.isArray(reason.details)) {
+    const validation = reason.details.find((item): item is { message: string } => Boolean(item && typeof item === 'object' && 'message' in item && typeof item.message === 'string'));
+    if (validation) return validation.message;
+  }
+  return reason instanceof Error ? reason.message : fallback;
 }
 
 export class StaleResponseError extends Error {
@@ -220,7 +228,7 @@ export const api = {
   changePassword: async (currentPassword: string, newPassword: string) => { const result = await request<AuthSession>('/api/v1/auth/password', { method: 'POST', body: JSON.stringify({ currentPassword, newPassword }), operation: 'auth-password' }); csrfToken = result.csrfToken; return result; },
   seasons: (signal?: AbortSignal) => request<{ items: Season[] }>('/api/v1/seasons', { signal, operation: 'seasons', staleKey: 'seasons' }),
   players: (params: URLSearchParams, signal?: AbortSignal) => { const seasonId = Number(params.get('seasonId')); return request<{ items: PlayerResearchItem[]; teams: Team[]; total: number; page: number; pageSize: number; freshness: Freshness }>(`/api/v1/players?${params}`, { signal, operation: 'players', staleKey: `players:${params.toString()}`, expectedSeasonId: seasonId }); },
-  player: (seasonId: number, id: number, signal?: AbortSignal) => request<{ player: Player; team: Team; history: { gameweek: number; totalPoints: number; minutes: number }[]; fixtures: Fixture[]; freshness: Freshness }>(`/api/v1/players/${id}?seasonId=${seasonId}`, { signal, operation: 'player', staleKey: `player:${seasonId}:${id}`, expectedSeasonId: seasonId }),
+  player: (seasonId: number, id: number, signal?: AbortSignal) => request<{ player: Player; team: Team; history: { gameweek: number; totalPoints: number; minutes: number }[]; fixtures: Fixture[]; fixtureContext: string; freshness: Freshness }>(`/api/v1/players/${id}?seasonId=${seasonId}`, { signal, operation: 'player', staleKey: `player:${seasonId}:${id}`, expectedSeasonId: seasonId }),
   compare: (seasonId: number, ids: number[], signal?: AbortSignal) => request<{ items: { player: Player; team: Team; history: unknown[]; fixtures: Fixture[] }[]; freshness: Freshness }>(`/api/v1/players/compare?ids=${ids.join(',')}&seasonId=${seasonId}`, { signal, operation: 'compare', staleKey: `compare:${seasonId}`, expectedSeasonId: seasonId }),
   squad: (seasonId: number, signal?: AbortSignal) => request<Squad>(`/api/v1/squad?seasonId=${seasonId}`, { signal, operation: 'squad', staleKey: `squad:${seasonId}`, expectedSeasonId: seasonId }),
   saveSquad: (seasonId: number, squad: Partial<Squad>) => request<Squad>(`/api/v1/squad?seasonId=${seasonId}`, { method: 'PUT', body: JSON.stringify(squad), operation: 'save-squad', expectedSeasonId: seasonId }),

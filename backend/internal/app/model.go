@@ -250,11 +250,12 @@ type DatasetSnapshot struct {
 }
 
 type PlayerDetail struct {
-	Player    Player          `json:"player"`
-	Team      Team            `json:"team"`
-	History   []PlayerHistory `json:"history"`
-	Fixtures  []Fixture       `json:"fixtures"`
-	Freshness Freshness       `json:"freshness"`
+	Player         Player          `json:"player"`
+	Team           Team            `json:"team"`
+	History        []PlayerHistory `json:"history"`
+	Fixtures       []Fixture       `json:"fixtures"`
+	FixtureContext string          `json:"fixtureContext"`
+	Freshness      Freshness       `json:"freshness"`
 }
 
 type PlayerAnalysis struct {
@@ -337,6 +338,7 @@ type Recommendation struct {
 	Gameweek         Gameweek               `json:"gameweek"`
 	SnapshotAt       time.Time              `json:"snapshotAt"`
 	AlgorithmVersion string                 `json:"algorithmVersion"`
+	Formation        string                 `json:"formation"`
 	Weights          Weights                `json:"weights"`
 	StartingXI       []RecommendationPlayer `json:"startingXI"`
 	Bench            []RecommendationPlayer `json:"bench"`

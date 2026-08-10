@@ -28,7 +28,7 @@ test.describe('manager and league workspace', () => {
     await expect(workspace.getByRole('status')).toContainText('FPL session connected');
     const browserStorage = await page.evaluate(() => JSON.stringify({ local: { ...localStorage }, session: { ...sessionStorage } }));
     expect(browserStorage).not.toContain(remoteSecret);
-    await workspace.getByRole('button', { name: 'Sync manager data' }).click();
+    await workspace.getByRole('button', { name: 'Sync configured data' }).click();
     await expect(workspace.getByRole('status')).toContainText('Manager sync completed');
     await workspace.getByRole('button', { name: 'Preview active team' }).click();
     await expect(page.getByTestId('import-preview')).toContainText('Added: 8');
@@ -68,7 +68,7 @@ test.describe('manager and league workspace', () => {
     await workspace.getByRole('button', { name: 'Connect session' }).click();
     await expect(workspace.getByLabel('FPL session')).toHaveValue('');
     await expect(workspace.getByRole('status')).toContainText('could not be validated');
-    await workspace.getByRole('button', { name: 'Sync manager data' }).click();
+    await workspace.getByRole('button', { name: 'Sync configured data' }).click();
     await expect(workspace.getByRole('status')).toContainText('Manager synchronization failed');
     await workspace.getByRole('button', { name: 'Preview active team' }).click();
     await expect(workspace.getByRole('status')).toContainText('No synchronized active team was found');
@@ -88,5 +88,15 @@ test.describe('manager and league workspace', () => {
     await workspace.getByRole('button', { name: 'Load league teams' }).click();
     await expect(workspace.getByText('No ranked teams are available yet.')).toBeVisible();
     await expect(workspace.getByRole('button', { name: 'Compare selected teams' })).toBeDisabled();
+  });
+
+  test('explains that league join codes are not numeric standings identifiers', async ({ page }) => {
+    await openApp(page);
+    await page.locator('nav').getByRole('button', { name: 'Manager & leagues' }).click();
+    const workspace = page.getByTestId('manager-workspace');
+    await workspace.getByLabel('League ID').fill('yelvr5');
+    await workspace.getByRole('button', { name: 'Save league' }).click();
+    await expect(workspace.getByRole('status')).toContainText('alphanumeric join code cannot be used');
+    await expect(workspace.getByRole('button', { name: 'Load league teams' })).toBeDisabled();
   });
 });

@@ -813,15 +813,23 @@ func (r *PostgresRepository) LoadPlayerDetail(ctx context.Context, seasonSourceI
 		return PlayerDetail{}, false, err
 	}
 	historyRows.Close()
-	fixtureRows, err := r.db.QueryContext(ctx, `SELECT f.source_id, COALESCE(g.source_id,0), f.kickoff_time, f.finished, h.source_id, a.source_id, COALESCE(f.team_home_difficulty,0), COALESCE(f.team_away_difficulty,0), f.team_home_score, f.team_away_score FROM fixtures f JOIN teams h ON h.id=f.team_home_id JOIN teams a ON a.id=f.team_away_id JOIN seasons s ON s.id=f.season_id LEFT JOIN gameweeks g ON g.id=f.gameweek_id WHERE (s.source_id=$1 OR ($1=0 AND s.is_current)) AND f.finished=FALSE AND (h.source_id=$2 OR a.source_id=$2) ORDER BY f.kickoff_time NULLS LAST`, seasonSourceID, detail.Team.ID)
+	fixtureRows, err := r.db.QueryContext(ctx, `SELECT f.source_id, COALESCE(g.source_id,0), f.kickoff_time, f.finished, h.source_id, a.source_id, COALESCE(f.team_home_difficulty,0), COALESCE(f.team_away_difficulty,0), f.team_home_score, f.team_away_score, h.short_name, a.short_name FROM fixtures f JOIN teams h ON h.id=f.team_home_id JOIN teams a ON a.id=f.team_away_id JOIN seasons s ON s.id=f.season_id LEFT JOIN gameweeks g ON g.id=f.gameweek_id WHERE (s.source_id=$1 OR ($1=0 AND s.is_current)) AND f.finished=FALSE AND (h.source_id=$2 OR a.source_id=$2) ORDER BY f.kickoff_time NULLS LAST`, seasonSourceID, detail.Team.ID)
 	if err != nil {
 		return PlayerDetail{}, false, err
 	}
 	for fixtureRows.Next() {
 		var row Fixture
-		if err := fixtureRows.Scan(&row.ID, &row.Gameweek, &row.KickoffTime, &row.Finished, &row.HomeTeam, &row.AwayTeam, &row.HomeDifficulty, &row.AwayDifficulty, &row.HomeScore, &row.AwayScore); err != nil {
+		var homeShortName, awayShortName string
+		if err := fixtureRows.Scan(&row.ID, &row.Gameweek, &row.KickoffTime, &row.Finished, &row.HomeTeam, &row.AwayTeam, &row.HomeDifficulty, &row.AwayDifficulty, &row.HomeScore, &row.AwayScore, &homeShortName, &awayShortName); err != nil {
 			fixtureRows.Close()
 			return PlayerDetail{}, false, err
+		}
+		if detail.FixtureContext == "" {
+			if row.HomeTeam == detail.Team.ID {
+				detail.FixtureContext = fmt.Sprintf("H vs %s", awayShortName)
+			} else {
+				detail.FixtureContext = fmt.Sprintf("A vs %s", homeShortName)
+			}
 		}
 		detail.Fixtures = append(detail.Fixtures, row)
 	}
