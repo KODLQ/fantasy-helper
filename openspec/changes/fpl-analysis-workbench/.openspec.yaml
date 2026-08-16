@@ -4,3 +4,7 @@ dependsOn:
   - fpl-public-data-warehouse
   - local-user-authentication
   - fpl-manager-league-sync
+  - fpl-league-gameweek-insights
+  - fpl-transfer-fixture-research
+  - fpl-recommendation-evaluation
+  - fpl-live-alerts-storyline

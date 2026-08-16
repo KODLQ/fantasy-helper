@@ -1,7 +1,6 @@
 schema: spec-driven
 created: 2026-08-09
 dependsOn:
-  - fpl-analysis-workbench
   - fpl-public-data-warehouse
   - local-user-authentication
   - fpl-manager-league-sync

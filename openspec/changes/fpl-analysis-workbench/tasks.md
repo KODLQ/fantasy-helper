@@ -1,9 +1,9 @@
 ## 1. Roadmap and ownership
 
-- [ ] 1.1 Record the four child changes as the authoritative owners of their domain specs, APIs, formulas, persistence, UI, and Playwright tests.
-- [ ] 1.2 Add repository-level dependency metadata and a documented delivery order for warehouse, authentication, manager/league, analysis children, and optimal-team learning.
-- [ ] 1.3 Remove or reject duplicate parent domain specs during OpenSpec review.
-- [ ] 1.4 Add and maintain `openspec/formulas.yaml` with formula IDs, versions, normalization rules, owners, consumers, and compatibility tests.
+- [x] 1.1 Record the four child changes as the authoritative owners of their domain specs, APIs, formulas, persistence, UI, and Playwright tests.
+- [x] 1.2 Add repository-level dependency metadata and a documented delivery order for warehouse, authentication, manager/league, analysis children, and optimal-team learning.
+- [x] 1.3 Remove or reject duplicate parent domain specs during OpenSpec review.
+- [x] 1.4 Add and maintain `openspec/formulas.yaml` with formula IDs, versions, normalization rules, owners, consumers, and compatibility tests.
 
 ## 2. Cross-workbench compatibility
 
