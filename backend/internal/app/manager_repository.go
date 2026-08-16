@@ -29,10 +29,12 @@ type ManagerDataRepository interface {
 	LoadManagerSummary(context.Context, int64, int, int) (ManagerEntry, bool, error)
 	LoadManagerPicks(context.Context, int64, int, int, int) ([]ManagerPick, error)
 	LoadManagerTransfers(context.Context, int64, int, int) ([]ManagerTransfer, error)
+	LoadAutomaticSubstitutions(context.Context, int64, int, int, int) ([]AutomaticSubstitution, error)
 	LoadLeagueStandings(context.Context, int64, int, int, int, int) (LeagueStandings, bool, error)
 	LoadActiveTeam(context.Context, int64, int, int, int) (ActiveTeamSnapshot, bool, error)
 	LoadLeagueMembers(context.Context, int64, int, int, int) ([]LeagueMember, error)
 	LoadPlayerGameweekPoints(context.Context, int, int) (map[int]int, string, error)
+	LoadUnfinishedFixtureIDs(context.Context, int, int) ([]int, error)
 	ImportActiveTeam(context.Context, int64, int, int64, string, Squad) (SquadImportResult, error)
 	LinkLeagueMemberPick(context.Context, int64, int, int, int, int, int64, string, string) error
 	LoadManagerDecisionAnalysis(context.Context, int64, int, int, int) (ManagerDecisionAnalysis, error)

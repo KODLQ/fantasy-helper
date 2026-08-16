@@ -170,6 +170,12 @@ type ManagerTransfer struct {
 	MadeAt        time.Time `json:"madeAt"`
 }
 
+type AutomaticSubstitution struct {
+	PlayerIn  int `json:"playerIn"`
+	PlayerOut int `json:"playerOut"`
+	Impact    int `json:"impact"`
+}
+
 type LeagueMember struct {
 	EntryID    int    `json:"entryId"`
 	EntryName  string `json:"entryName"`
@@ -239,6 +245,66 @@ type LeagueComparisonResult struct {
 	FailedMembers    []int             `json:"failedMemberEntryIds"`
 	Ownership        []PlayerOwnership `json:"ownership"`
 	SourceSnapshotAt time.Time         `json:"sourceSnapshotAt,omitempty"`
+	SnapshotIDs      map[int]string    `json:"snapshotIds"`
+	Coverage         AnalysisCoverage  `json:"coverage"`
+	FormulaVersions  []string          `json:"formulaVersions"`
+	Warnings         []string          `json:"warnings"`
+}
+
+type AnalysisCoverage struct {
+	Requested       int   `json:"requested"`
+	Selected        int   `json:"selected"`
+	Complete        int   `json:"complete"`
+	Omitted         int   `json:"omitted"`
+	MissingEntryIDs []int `json:"missingEntryIds"`
+}
+
+type LeagueSummary struct {
+	LeagueID        int              `json:"leagueId"`
+	Name            string           `json:"name"`
+	SeasonID        int              `json:"seasonId"`
+	Gameweek        int              `json:"gameweek"`
+	Members         []LeagueMember   `json:"members"`
+	SelectedIDs     []int            `json:"selectedEntryIds"`
+	OmittedIDs      []int            `json:"omittedEntryIds"`
+	SnapshotIDs     map[int]string   `json:"snapshotIds"`
+	Coverage        AnalysisCoverage `json:"coverage"`
+	OutcomeState    string           `json:"outcomeState"`
+	FormulaVersions []string         `json:"formulaVersions"`
+	MissingInputs   []string         `json:"missingInputs"`
+	Warnings        []string         `json:"warnings"`
+}
+
+type PlayerContribution struct {
+	PlayerID        int `json:"playerId"`
+	BasePoints      int `json:"basePoints"`
+	Multiplier      int `json:"multiplier"`
+	EffectivePoints int `json:"effectivePoints"`
+}
+
+type GameweekAutopsy struct {
+	EntryID                int                     `json:"entryId"`
+	RivalEntryID           int                     `json:"rivalEntryId,omitempty"`
+	SeasonID               int                     `json:"seasonId"`
+	Gameweek               int                     `json:"gameweek"`
+	GrossPoints            int                     `json:"grossPoints"`
+	TransferCost           int                     `json:"transferCost"`
+	NetPoints              int                     `json:"netPoints"`
+	CaptainID              int                     `json:"captainId,omitempty"`
+	CaptainDelta           int                     `json:"captainDelta"`
+	BenchPoints            int                     `json:"benchPoints"`
+	ActiveChip             string                  `json:"activeChip,omitempty"`
+	Transfers              []ManagerTransfer       `json:"transfers"`
+	AutomaticSubstitutions []AutomaticSubstitution `json:"automaticSubstitutions"`
+	Contributions          []PlayerContribution    `json:"contributions"`
+	RivalComparison        *TeamComparison         `json:"rivalComparison,omitempty"`
+	OutcomeState           string                  `json:"outcomeState"`
+	SnapshotIDs            map[int]string          `json:"snapshotIds"`
+	FormulaVersions        []string                `json:"formulaVersions"`
+	MissingInputs          []string                `json:"missingInputs"`
+	Warnings               []string                `json:"warnings"`
+	MetricsAvailable       bool                    `json:"metricsAvailable"`
+	UnfinishedFixtureIDs   []int                   `json:"unfinishedFixtureIds"`
 }
 
 type PlayerOwnership struct {
@@ -301,25 +367,28 @@ func SelectLeagueMembers(members []LeagueMember, explicit []int, rankFrom, rankT
 }
 
 type TeamComparison struct {
-	EntryID              int         `json:"entryId"`
-	OpponentEntryID      int         `json:"opponentEntryId"`
-	SharedPlayers        []int       `json:"sharedPlayers"`
-	Differentials        []int       `json:"differentials"`
-	BenchPlayerIDs       []int       `json:"benchPlayerIds"`
-	BenchDifferences     []int       `json:"benchDifferences"`
-	CaptainID            int         `json:"captainId"`
-	ViceCaptainID        int         `json:"viceCaptainId"`
-	CaptainDifferent     bool        `json:"captainDifferent"`
-	ViceCaptainDifferent bool        `json:"viceCaptainDifferent"`
-	Formation            string      `json:"formation"`
-	FormationDifferent   bool        `json:"formationDifferent"`
-	Overlap              float64     `json:"overlap"`
-	GrossPoints          int         `json:"grossPoints"`
-	TransferCost         int         `json:"transferCost"`
-	NetPoints            int         `json:"netPoints"`
-	PointDifference      int         `json:"pointDifference"`
-	PlayerContributions  map[int]int `json:"playerContributions"`
-	OutcomeState         string      `json:"outcomeState"`
+	EntryID                  int         `json:"entryId"`
+	OpponentEntryID          int         `json:"opponentEntryId"`
+	SharedPlayers            []int       `json:"sharedPlayers"`
+	Differentials            []int       `json:"differentials"`
+	BenchPlayerIDs           []int       `json:"benchPlayerIds"`
+	BenchDifferences         []int       `json:"benchDifferences"`
+	CaptainID                int         `json:"captainId"`
+	ViceCaptainID            int         `json:"viceCaptainId"`
+	CaptainDifferent         bool        `json:"captainDifferent"`
+	ViceCaptainDifferent     bool        `json:"viceCaptainDifferent"`
+	Formation                string      `json:"formation"`
+	FormationDifferent       bool        `json:"formationDifferent"`
+	Overlap                  float64     `json:"overlap"`
+	StartingXIOverlap        float64     `json:"startingXIOverlap"`
+	DifferentialContribution int         `json:"differentialContribution"`
+	CaptainDelta             int         `json:"captainDelta"`
+	GrossPoints              int         `json:"grossPoints"`
+	TransferCost             int         `json:"transferCost"`
+	NetPoints                int         `json:"netPoints"`
+	PointDifference          int         `json:"pointDifference"`
+	PlayerContributions      map[int]int `json:"playerContributions"`
+	OutcomeState             string      `json:"outcomeState"`
 }
 
 func CompareTeams(left, right []ManagerPick, points map[int]int, transferCost int, outcome string) (TeamComparison, TeamComparison) {
@@ -379,11 +448,46 @@ func CompareTeamsWithCosts(left, right []ManagerPick, points map[int]int, leftTr
 			}
 		}
 		sort.Ints(bench)
-		return TeamComparison{BenchPlayerIDs: bench, CaptainID: captain, ViceCaptainID: vice, Formation: fmt.Sprintf("%d-%d-%d", roles[Defender], roles[Midfielder], roles[Forward]), GrossPoints: total, TransferCost: transferCost, NetPoints: total - transferCost, PlayerContributions: contributions, OutcomeState: outcome}
+		captainDelta := 0
+		if captainPick, ok := items[captain]; ok {
+			captainDelta = points[captain] * (captainPick.Multiplier - 1)
+		}
+		return TeamComparison{BenchPlayerIDs: bench, CaptainID: captain, ViceCaptainID: vice, CaptainDelta: captainDelta, Formation: fmt.Sprintf("%d-%d-%d", roles[Defender], roles[Midfielder], roles[Forward]), GrossPoints: total, TransferCost: transferCost, NetPoints: total - transferCost, PlayerContributions: contributions, OutcomeState: outcome}
 	}
 	l, r := describe(leftSet, leftTransferCost), describe(rightSet, rightTransferCost)
 	l.SharedPlayers, l.Differentials, l.Overlap = shared, leftOnly, overlap
 	r.SharedPlayers, r.Differentials, r.Overlap = shared, rightOnly, overlap
+	leftXI, rightXI := map[int]bool{}, map[int]bool{}
+	for id, pick := range leftSet {
+		if pick.Position <= 11 {
+			leftXI[id] = true
+		}
+	}
+	for id, pick := range rightSet {
+		if pick.Position <= 11 {
+			rightXI[id] = true
+		}
+	}
+	xiIntersection, xiUnion := 0, len(leftXI)
+	for id := range rightXI {
+		if leftXI[id] {
+			xiIntersection++
+		} else {
+			xiUnion++
+		}
+	}
+	if xiUnion > 0 {
+		l.StartingXIOverlap, r.StartingXIOverlap = float64(xiIntersection)/float64(xiUnion), float64(xiIntersection)/float64(xiUnion)
+	}
+	leftDifferentialPoints, rightDifferentialPoints := 0, 0
+	for _, id := range leftOnly {
+		leftDifferentialPoints += l.PlayerContributions[id]
+	}
+	for _, id := range rightOnly {
+		rightDifferentialPoints += r.PlayerContributions[id]
+	}
+	l.DifferentialContribution = leftDifferentialPoints - rightDifferentialPoints
+	r.DifferentialContribution = rightDifferentialPoints - leftDifferentialPoints
 	l.PointDifference, r.PointDifference = l.NetPoints-r.NetPoints, r.NetPoints-l.NetPoints
 	l.CaptainDifferent, r.CaptainDifferent = l.CaptainID != r.CaptainID, l.CaptainID != r.CaptainID
 	l.ViceCaptainDifferent, r.ViceCaptainDifferent = l.ViceCaptainID != r.ViceCaptainID, l.ViceCaptainID != r.ViceCaptainID
@@ -409,4 +513,26 @@ func symmetricDifference(left, right []int) []int {
 	}
 	sort.Ints(result)
 	return result
+}
+
+func AutomaticSubstitutionImpact(item AutomaticSubstitution, points map[int]int) (int, bool) {
+	inPoints, inFound := points[item.PlayerIn]
+	outPoints, outFound := points[item.PlayerOut]
+	return inPoints - outPoints, inFound && outFound
+}
+
+func ResolveAnalysisOutcome(base string, hasMissingInputs, stale bool) string {
+	if base == "estimated" || base == "unavailable" || base == "" {
+		return "unavailable"
+	}
+	if hasMissingInputs {
+		return "partial"
+	}
+	if stale {
+		return "stale"
+	}
+	if base == "provisional" {
+		return "provisional"
+	}
+	return "actual"
 }

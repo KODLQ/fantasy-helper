@@ -346,15 +346,32 @@ func (s *ManagerService) CompareLeague(ctx context.Context, userID int64, season
 	}
 	selected, omitted := SelectLeagueMembers(members, explicit, rankFrom, rankTo, limit)
 	result := LeagueComparisonResult{
-		LeagueID:      leagueID,
-		SeasonID:      seasonID,
-		Gameweek:      gameweek,
-		SelectedIDs:   nonNilInts(selected),
-		OmittedIDs:    nonNilInts(omitted),
-		Comparisons:   []TeamComparison{},
-		MissingInputs: []string{},
-		FailedMembers: []int{},
-		Ownership:     []PlayerOwnership{},
+		LeagueID:        leagueID,
+		SeasonID:        seasonID,
+		Gameweek:        gameweek,
+		SelectedIDs:     nonNilInts(selected),
+		OmittedIDs:      nonNilInts(omitted),
+		Comparisons:     []TeamComparison{},
+		MissingInputs:   []string{},
+		FailedMembers:   []int{},
+		Ownership:       []PlayerOwnership{},
+		SnapshotIDs:     map[int]string{},
+		FormulaVersions: []string{"team-overlap-v1", "differential-contribution-v1", "team-points-difference-v1", "captain-delta-v1", "transfer-cost-v1"},
+		Warnings:        []string{},
+	}
+	result.Coverage = AnalysisCoverage{Requested: len(selected), Selected: len(selected), Omitted: len(omitted), MissingEntryIDs: []int{}}
+	if len(explicit) > 0 {
+		available := map[int]bool{}
+		for _, member := range members {
+			available[member.EntryID] = true
+		}
+		for _, entryID := range explicit {
+			if !available[entryID] {
+				result.Coverage.MissingEntryIDs = append(result.Coverage.MissingEntryIDs, entryID)
+				result.MissingInputs = append(result.MissingInputs, fmt.Sprintf("entry:%d:not-in-league-snapshot", entryID))
+			}
+		}
+		result.Coverage.Requested = len(explicit)
 	}
 	result.FailedMembers, err = s.Repository.LoadLeagueMemberFailures(ctx, userID, seasonID, leagueID, gameweek)
 	if err != nil {
@@ -365,6 +382,7 @@ func (s *ManagerService) CompareLeague(ctx context.Context, userID int64, season
 	}
 	if len(selected) < 2 {
 		result.MissingInputs = append(result.MissingInputs, "at-least-two-member-pick-snapshots")
+		result.OutcomeState = "unavailable"
 		return result, nil
 	}
 	points, state, err := s.Repository.LoadPlayerGameweekPoints(ctx, seasonID, gameweek)
@@ -374,6 +392,10 @@ func (s *ManagerService) CompareLeague(ctx context.Context, userID int64, season
 	result.OutcomeState = state
 	if state == "estimated" {
 		result.AlgorithmVersion = "league-points-estimate-v1"
+		result.OutcomeState = "unavailable"
+		result.MissingInputs = append(result.MissingInputs, "final-or-provisional-player-gameweek-points")
+		result.Warnings = append(result.Warnings, "League comparisons are unavailable until player gameweek points have been synchronized.")
+		return result, nil
 	}
 	analyses := []ManagerDecisionAnalysis{}
 	ownership := map[int]int{}
@@ -384,15 +406,33 @@ func (s *ManagerService) CompareLeague(ctx context.Context, userID int64, season
 		}
 		if len(analysis.Picks) == 0 {
 			result.MissingInputs = append(result.MissingInputs, fmt.Sprintf("entry:%d:picks", entryID))
+			result.Coverage.MissingEntryIDs = append(result.Coverage.MissingEntryIDs, entryID)
+			continue
+		}
+		compatible := true
+		for _, pick := range analysis.Picks {
+			if _, found := points[pick.PlayerID]; !found {
+				result.MissingInputs = append(result.MissingInputs, fmt.Sprintf("entry:%d:player:%d:gameweek-points", entryID, pick.PlayerID))
+				compatible = false
+			}
+		}
+		if !compatible {
+			result.Coverage.MissingEntryIDs = append(result.Coverage.MissingEntryIDs, entryID)
 			continue
 		}
 		analyses = append(analyses, analysis)
+		result.Coverage.Complete++
+		result.SnapshotIDs[entryID] = analysis.SnapshotID
 		if analysis.SourceFetchedAt.After(result.SourceSnapshotAt) {
 			result.SourceSnapshotAt = analysis.SourceFetchedAt
 		}
 		for _, pick := range analysis.Picks {
 			ownership[pick.PlayerID]++
 		}
+	}
+	if result.Coverage.Complete < result.Coverage.Selected {
+		result.OutcomeState = ResolveAnalysisOutcome(state, true, false)
+		result.Warnings = append(result.Warnings, "Some selected teams have no compatible pick snapshot and were excluded from comparisons.")
 	}
 	for i := 0; i < len(analyses); i++ {
 		for j := i + 1; j < len(analyses); j++ {
@@ -406,6 +446,151 @@ func (s *ManagerService) CompareLeague(ctx context.Context, userID int64, season
 		result.Ownership = append(result.Ownership, PlayerOwnership{PlayerID: playerID, Count: count, Rate: float64(count) / float64(len(analyses))})
 	}
 	sort.Slice(result.Ownership, func(i, j int) bool { return result.Ownership[i].PlayerID < result.Ownership[j].PlayerID })
+	return result, nil
+}
+
+func (s *ManagerService) LeagueSummary(ctx context.Context, userID int64, seasonID, leagueID, gameweek, limit int) (LeagueSummary, error) {
+	members, err := s.Repository.LoadLeagueMembers(ctx, userID, seasonID, leagueID, gameweek)
+	if err != nil {
+		return LeagueSummary{}, err
+	}
+	selected, omitted := SelectLeagueMembers(members, nil, 0, 0, limit)
+	result := LeagueSummary{LeagueID: leagueID, SeasonID: seasonID, Gameweek: gameweek, Members: members, SelectedIDs: nonNilInts(selected), OmittedIDs: nonNilInts(omitted), SnapshotIDs: map[int]string{}, FormulaVersions: []string{"team-overlap-v1", "differential-contribution-v1", "team-points-difference-v1"}, MissingInputs: []string{}, Warnings: []string{}, OutcomeState: "actual"}
+	standingsFound := false
+	if standings, found, standingsErr := s.Repository.LoadLeagueStandings(ctx, userID, seasonID, leagueID, gameweek, 1); standingsErr != nil {
+		return result, standingsErr
+	} else if found {
+		standingsFound = true
+		result.Name = standings.Name
+	}
+	result.Coverage = AnalysisCoverage{Requested: len(selected), Selected: len(selected), Omitted: len(omitted), MissingEntryIDs: []int{}}
+	if len(members) == 0 {
+		if standingsFound {
+			result.Warnings = append(result.Warnings, "The synchronized league snapshot has no ranked members yet.")
+		} else {
+			result.OutcomeState = "unavailable"
+			result.MissingInputs = append(result.MissingInputs, "league-standings-snapshot")
+		}
+		return result, nil
+	}
+	for _, entryID := range selected {
+		analysis, loadErr := s.Repository.LoadManagerDecisionAnalysis(ctx, userID, seasonID, entryID, gameweek)
+		if loadErr != nil {
+			return result, loadErr
+		}
+		if len(analysis.Picks) == 0 {
+			result.Coverage.MissingEntryIDs = append(result.Coverage.MissingEntryIDs, entryID)
+			result.MissingInputs = append(result.MissingInputs, fmt.Sprintf("entry:%d:picks", entryID))
+			continue
+		}
+		if analysis.OutcomeState == "estimated" {
+			result.Coverage.MissingEntryIDs = append(result.Coverage.MissingEntryIDs, entryID)
+			result.MissingInputs = append(result.MissingInputs, fmt.Sprintf("entry:%d:player-gameweek-points", entryID))
+			result.OutcomeState = "unavailable"
+			continue
+		}
+		result.Coverage.Complete++
+		result.SnapshotIDs[entryID] = analysis.SnapshotID
+		if analysis.OutcomeState == "provisional" {
+			result.OutcomeState = "provisional"
+		}
+	}
+	if result.Coverage.Complete < result.Coverage.Selected {
+		result.OutcomeState = ResolveAnalysisOutcome(result.OutcomeState, true, false)
+		result.Warnings = append(result.Warnings, "Coverage excludes members without a compatible pick snapshot.")
+	}
+	return result, nil
+}
+
+func (s *ManagerService) GameweekAutopsy(ctx context.Context, userID int64, seasonID, entryID, rivalEntryID, gameweek int) (GameweekAutopsy, error) {
+	analysis, err := s.Repository.LoadManagerDecisionAnalysis(ctx, userID, seasonID, entryID, gameweek)
+	if err != nil {
+		return GameweekAutopsy{}, err
+	}
+	result := GameweekAutopsy{EntryID: entryID, RivalEntryID: rivalEntryID, SeasonID: seasonID, Gameweek: gameweek, GrossPoints: analysis.GrossPoints, TransferCost: analysis.TransferCost, NetPoints: analysis.NetPoints, BenchPoints: analysis.BenchPoints, ActiveChip: analysis.ActiveChip, Transfers: []ManagerTransfer{}, AutomaticSubstitutions: []AutomaticSubstitution{}, Contributions: []PlayerContribution{}, OutcomeState: analysis.OutcomeState, SnapshotIDs: map[int]string{}, FormulaVersions: []string{"player-points-v1", "team-points-v1", "captain-delta-v1", "transfer-cost-v1", "automatic-substitution-impact-v1"}, MissingInputs: []string{}, Warnings: []string{}, UnfinishedFixtureIDs: []int{}}
+	if len(analysis.Picks) == 0 {
+		result.OutcomeState = "unavailable"
+		result.MissingInputs = append(result.MissingInputs, fmt.Sprintf("entry:%d:picks", entryID))
+		return result, nil
+	}
+	result.SnapshotIDs[entryID] = analysis.SnapshotID
+	points, pointsState, err := s.Repository.LoadPlayerGameweekPoints(ctx, seasonID, gameweek)
+	if err != nil {
+		return result, err
+	}
+	if pointsState == "estimated" {
+		result.OutcomeState = "unavailable"
+		result.GrossPoints, result.NetPoints, result.CaptainDelta = 0, 0, 0
+		result.MissingInputs = append(result.MissingInputs, "final-or-provisional-player-gameweek-points")
+		result.Warnings = append(result.Warnings, "The autopsy is unavailable until gameweek points have been synchronized.")
+		return result, nil
+	}
+	result.MetricsAvailable = true
+	if pointsState == "provisional" {
+		result.UnfinishedFixtureIDs, err = s.Repository.LoadUnfinishedFixtureIDs(ctx, seasonID, gameweek)
+		if err != nil {
+			return result, err
+		}
+	}
+	if analysis.ActiveChip != "" && analysis.ActiveChip != "bboost" && analysis.ActiveChip != "3xc" && analysis.ActiveChip != "freehit" && analysis.ActiveChip != "wildcard" {
+		result.MissingInputs = append(result.MissingInputs, fmt.Sprintf("chip:%s:unsupported", analysis.ActiveChip))
+	}
+	for _, pick := range analysis.Picks {
+		base, found := points[pick.PlayerID]
+		if !found {
+			result.MissingInputs = append(result.MissingInputs, fmt.Sprintf("player:%d:gameweek-points", pick.PlayerID))
+			continue
+		}
+		result.Contributions = append(result.Contributions, PlayerContribution{PlayerID: pick.PlayerID, BasePoints: base, Multiplier: pick.Multiplier, EffectivePoints: base * pick.Multiplier})
+		if pick.Captain {
+			result.CaptainID = pick.PlayerID
+			result.CaptainDelta = base * (pick.Multiplier - 1)
+		}
+	}
+	transfers, err := s.Repository.LoadManagerTransfers(ctx, userID, seasonID, entryID)
+	if err != nil {
+		return result, err
+	}
+	for _, transfer := range transfers {
+		if transfer.Gameweek == gameweek {
+			result.Transfers = append(result.Transfers, transfer)
+		}
+	}
+	result.AutomaticSubstitutions, err = s.Repository.LoadAutomaticSubstitutions(ctx, userID, seasonID, entryID, gameweek)
+	if err != nil {
+		return result, err
+	}
+	for index := range result.AutomaticSubstitutions {
+		item := &result.AutomaticSubstitutions[index]
+		impact, found := AutomaticSubstitutionImpact(*item, points)
+		if found {
+			item.Impact = impact
+		} else {
+			result.MissingInputs = append(result.MissingInputs, fmt.Sprintf("automatic-substitution:%d:%d:points", item.PlayerIn, item.PlayerOut))
+		}
+	}
+	if rivalEntryID > 0 {
+		rival, rivalErr := s.Repository.LoadManagerDecisionAnalysis(ctx, userID, seasonID, rivalEntryID, gameweek)
+		if rivalErr != nil {
+			return result, rivalErr
+		}
+		if len(rival.Picks) == 0 {
+			result.MissingInputs = append(result.MissingInputs, fmt.Sprintf("entry:%d:picks", rivalEntryID))
+		} else {
+			left, _ := CompareTeamsWithCosts(analysis.Picks, rival.Picks, points, analysis.TransferCost, rival.TransferCost, pointsState)
+			left.EntryID, left.OpponentEntryID = entryID, rivalEntryID
+			result.RivalComparison = &left
+			result.SnapshotIDs[rivalEntryID] = rival.SnapshotID
+			result.FormulaVersions = append(result.FormulaVersions, "team-overlap-v1", "differential-contribution-v1", "team-points-difference-v1")
+		}
+	}
+	if len(result.MissingInputs) > 0 {
+		result.OutcomeState = ResolveAnalysisOutcome(pointsState, true, false)
+		result.Warnings = append(result.Warnings, "Some inputs are missing; displayed totals exclude unavailable facts.")
+	}
+	if pointsState == "provisional" {
+		result.Warnings = append(result.Warnings, "The gameweek is live, so points and comparisons may change.")
+	}
 	return result, nil
 }
 

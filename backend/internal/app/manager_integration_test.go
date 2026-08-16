@@ -284,6 +284,26 @@ func TestManagerLeagueSyncImportAnalysisAndPrivacyIntegration(t *testing.T) {
 	if analysisResponse.Code != http.StatusOK || !strings.Contains(analysisResponse.Body.String(), `"outcomeState":"actual"`) || !strings.Contains(analysisResponse.Body.String(), `"snapshotId":`) || !strings.Contains(analysisResponse.Body.String(), `"formulaVersions"`) {
 		t.Fatalf("analysis contract=%d %s", analysisResponse.Code, analysisResponse.Body.String())
 	}
+	leagueSummaryResponse := authRequest(handler, http.MethodGet, fmt.Sprintf("/api/v1/analysis/leagues/202/summary?seasonId=%d&gameweek=1&memberLimit=2", snapshot.Season.ID), "", ownerSession.Token, "")
+	if leagueSummaryResponse.Code != http.StatusOK || !strings.Contains(leagueSummaryResponse.Body.String(), `"coverage":{"requested":2,"selected":2,"complete":2`) || !strings.Contains(leagueSummaryResponse.Body.String(), `"snapshotIds"`) {
+		t.Fatalf("league summary contract=%d %s", leagueSummaryResponse.Code, leagueSummaryResponse.Body.String())
+	}
+	leagueComparisonResponse := authRequest(handler, http.MethodGet, fmt.Sprintf("/api/v1/analysis/leagues/202/comparison?seasonId=%d&gameweek=1&entryIds=101,102&memberLimit=2", snapshot.Season.ID), "", ownerSession.Token, "")
+	if leagueComparisonResponse.Code != http.StatusOK || !strings.Contains(leagueComparisonResponse.Body.String(), `"startingXIOverlap"`) || !strings.Contains(leagueComparisonResponse.Body.String(), `"differentialContribution"`) || !strings.Contains(leagueComparisonResponse.Body.String(), `team-overlap-v1`) {
+		t.Fatalf("league comparison contract=%d %s", leagueComparisonResponse.Code, leagueComparisonResponse.Body.String())
+	}
+	autopsyResponse := authRequest(handler, http.MethodGet, fmt.Sprintf("/api/v1/analysis/gameweeks/1/autopsy?seasonId=%d&entryId=101&rivalEntryId=102", snapshot.Season.ID), "", ownerSession.Token, "")
+	if autopsyResponse.Code != http.StatusOK || !strings.Contains(autopsyResponse.Body.String(), `"metricsAvailable":true`) || !strings.Contains(autopsyResponse.Body.String(), `"automaticSubstitutions"`) || !strings.Contains(autopsyResponse.Body.String(), `automatic-substitution-impact-v1`) {
+		t.Fatalf("autopsy contract=%d %s", autopsyResponse.Code, autopsyResponse.Body.String())
+	}
+	duplicateMembersResponse := authRequest(handler, http.MethodGet, fmt.Sprintf("/api/v1/analysis/leagues/202/comparison?seasonId=%d&gameweek=1&entryIds=101,101", snapshot.Season.ID), "", ownerSession.Token, "")
+	if duplicateMembersResponse.Code != http.StatusUnprocessableEntity || !strings.Contains(duplicateMembersResponse.Body.String(), `"code":"invalid_entry_ids"`) {
+		t.Fatalf("duplicate comparison members contract=%d %s", duplicateMembersResponse.Code, duplicateMembersResponse.Body.String())
+	}
+	isolatedAnalysisResponse := authRequest(handler, http.MethodGet, fmt.Sprintf("/api/v1/analysis/leagues/202/summary?seasonId=%d&gameweek=1&memberLimit=2", snapshot.Season.ID), "", otherSession.Token, "")
+	if isolatedAnalysisResponse.Code != http.StatusOK || strings.Contains(isolatedAnalysisResponse.Body.String(), "Integration League") || !strings.Contains(isolatedAnalysisResponse.Body.String(), `"outcomeState":"unavailable"`) {
+		t.Fatalf("cross-owner league analysis contract=%d %s", isolatedAnalysisResponse.Code, isolatedAnalysisResponse.Body.String())
+	}
 	missingScopeResponse := authRequest(handler, http.MethodGet, fmt.Sprintf("/api/v1/manager/entries/101/analysis?seasonId=%d", snapshot.Season.ID), "", ownerSession.Token, "")
 	if missingScopeResponse.Code != http.StatusUnprocessableEntity || !strings.Contains(missingScopeResponse.Body.String(), `"code":"manager_scope_required"`) {
 		t.Fatalf("missing scope contract=%d %s", missingScopeResponse.Code, missingScopeResponse.Body.String())

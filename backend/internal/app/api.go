@@ -152,6 +152,8 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/players", a.players)
 	mux.HandleFunc("/api/v1/players/", a.players)
 	mux.HandleFunc("/api/v1/analysis/players/", a.playerAnalysis)
+	mux.HandleFunc("/api/v1/analysis/leagues/", a.leagueAnalysis)
+	mux.HandleFunc("/api/v1/analysis/gameweeks/", a.gameweekAnalysis)
 	mux.HandleFunc("/api/v1/players/compare", a.compare)
 	mux.HandleFunc("/api/v1/squad", a.squad)
 	mux.HandleFunc("/api/v1/recommendations", a.recommendations)
