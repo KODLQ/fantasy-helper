@@ -27,7 +27,8 @@ Each child owns its proposal, design, specs, tasks, APIs, formulas, UI, and Play
 
 ## Impact
 
-- Depends on `fpl-public-data-warehouse`, `local-user-authentication`, and `fpl-manager-league-sync` before analysis delivery starts.
+- The four child changes depend directly on `fpl-public-data-warehouse`, `local-user-authentication`, and `fpl-manager-league-sync` and may be implemented in parallel after those foundations pass their release gates.
+- Final umbrella integration depends on all four child changes; `fpl-optimal-team-learning` follows the completed umbrella release gate.
 - Depends on the shared response contract and versioned snapshot/provenance semantics owned by the warehouse.
 - Adds no production endpoint or persisted domain model by itself.
 - Completion means all child changes pass their own strict specs/tests plus the cross-workbench browser smoke suite.

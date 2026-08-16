@@ -32,10 +32,13 @@ fpl-public-data-warehouse
                                              fpl-transfer-fixture-research
                                   │
                                   ▼
+                    fpl-analysis-workbench integration gate
+                                  │
+                                  ▼
                        fpl-optimal-team-learning
 ```
 
-The graph is a delivery order, not a prohibition on parallel implementation after prerequisites are complete. The optimal-team change consumes finalized warehouse, manager, and analysis contracts but remains a separate retrospective engine.
+The four children may be implemented in parallel after the warehouse, authentication, and manager prerequisites are complete. The umbrella's remaining implementation is a post-child integration and release gate, not a prerequisite for starting a child. The optimal-team change consumes the finalized warehouse, manager, child-analysis, and umbrella integration contracts but remains a separate retrospective engine.
 
 ## Shared integration contract
 
