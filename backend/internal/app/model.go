@@ -106,6 +106,7 @@ type Player struct {
 	Bonus             int     `json:"bonus"`
 	Saves             int     `json:"saves"`
 	SelectedByPercent float64 `json:"selectedByPercent,omitempty"`
+	OwnershipKnown    bool    `json:"ownershipKnown,omitempty"`
 	YellowCards       int     `json:"yellowCards,omitempty"`
 	RedCards          int     `json:"redCards,omitempty"`
 	OwnGoals          int     `json:"ownGoals,omitempty"`

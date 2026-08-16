@@ -14,6 +14,7 @@ export type Player = {
   news: string;
   expectedMinutes: number;
   recentReturns: number;
+  selectedByPercent?: number;
   goalsScored: number;
   assists: number;
   cleanSheets: number;
@@ -34,7 +35,7 @@ export type Team = {
 };
 
 export type PlayerResearchItem = { player: Player; team: Team };
-export type Fixture = { homeTeam: number; awayTeam: number; homeDifficulty: number; awayDifficulty: number };
+export type Fixture = { id?: number; gameweek?: number; homeTeam: number; awayTeam: number; homeDifficulty: number; awayDifficulty: number };
 
 export type Freshness = { status: string; state?: string; lastSuccessfulSync?: string; warning?: string; warnings?: string[]; snapshotAt?: string };
 export type Gameweek = { id: number; name: string; finished: boolean; isCurrent: boolean };
@@ -70,6 +71,14 @@ export type ValidationError = { code: string; rule: string; message: string; cur
 export type Squad = { name: string; budget: number; players: Player[]; purchasePrices: Record<number, number>; startingPlayerIds: number[]; benchPlayerIds: number[]; captainId: number; viceCaptainId: number; formation: string; totalCost: number; remainingBudget: number; validation: ValidationError[] };
 export type RecommendationPlayer = { player: Player; score: number; factors: { name: string; signal: number; weight: number; contribution: number }[]; fixture: string; explanation: string };
 export type Recommendation = { algorithmVersion: string; formation: string; weights: Record<string, number>; startingXI: RecommendationPlayer[]; bench: RecommendationPlayer[]; captain: RecommendationPlayer; viceCaptain: RecommendationPlayer; heuristicNotice: string; snapshotAt: string };
+export type TransferMove = { playerOut: number; playerIn: number };
+export type TransferSimulationInput = { seasonId: number; gameweek: number; horizon: number; freeTransfers: number; transfers: TransferMove[] };
+export type TransferSimulation = { simulationId: string; algorithmVersion: string; before: Squad; after: Squad; transfers: TransferMove[]; freeTransfers: number; freeTransfersUsed: number; paidTransfers: number; pointsHit: number; fixtureEaseBefore: number; fixtureEaseAfter: number; fixtureEaseDelta: number; state: string; snapshotId: string; deadline?: string; observedAt: string; formulaVersions: string[]; assumptions: string[]; missingInputs: string[] };
+export type FixtureResearchRow = { team: Team; ease: number; fixtureCount: number; gameweekCount: number; blankGameweeks: number[]; doubleGameweeks: number[]; fixtures: (Fixture & { id?: number; gameweek: number })[] };
+export type FixtureResearchResult = { items: FixtureResearchRow[]; gameweekFrom: number; gameweekTo: number; horizon: number; state: string; snapshotId: string; observedAt: string; formulaVersion: string; missingInputs: string[] };
+export type DifferentialRow = { player: Player; team: Team; score: number; components: { pointsPer90: number; minutesShare: number; fixtureEase: number; ownershipSignal: number; availability: number }; explanation: string };
+export type DifferentialResult = { items: DifferentialRow[]; peerCount: number; state: string; snapshotId: string; observedAt: string; formulaVersion: string; researchNotice: string; missingInputs: string[] };
+export type PlanningScenario = { id: number; name: string; simulationId: string; seasonId: number; gameweek: number; result: TransferSimulation; createdAt: string };
 
 export type RequestMeta = { requestId?: string; freshness?: Freshness; scope?: { seasonId?: number; gameweek?: number; dataset?: string }; warnings?: string[]; [key: string]: unknown };
 export class ApiError extends Error {
@@ -237,6 +246,10 @@ export const api = {
   squad: (seasonId: number, signal?: AbortSignal) => request<Squad>(`/api/v1/squad?seasonId=${seasonId}`, { signal, operation: 'squad', staleKey: `squad:${seasonId}`, expectedSeasonId: seasonId }),
   saveSquad: (seasonId: number, squad: Partial<Squad>) => request<Squad>(`/api/v1/squad?seasonId=${seasonId}`, { method: 'PUT', body: JSON.stringify(squad), operation: 'save-squad', expectedSeasonId: seasonId }),
   recommend: (seasonId: number, weights?: Record<string, number>, signal?: AbortSignal) => request<{ recommendation: Recommendation; freshness: Freshness }>(`/api/v1/recommendations?seasonId=${seasonId}`, { method: 'POST', body: JSON.stringify({ weights }), signal, operation: 'recommendation', staleKey: `recommendation:${seasonId}`, expectedSeasonId: seasonId }),
+  simulateTransfers: (simulation: TransferSimulationInput, signal?: AbortSignal) => request<TransferSimulation>('/api/v1/analysis/transfers/simulate', { method: 'POST', body: JSON.stringify(simulation), signal, operation: 'transfer-simulation', expectedSeasonId: simulation.seasonId }),
+  savePlanningScenario: (name: string, simulation: TransferSimulationInput) => request<PlanningScenario>('/api/v1/planning/scenarios', { method: 'POST', body: JSON.stringify({ name, confirmed: true, simulation }), operation: 'planning-scenario-save', expectedSeasonId: simulation.seasonId }),
+  fixtureResearch: (seasonId: number, gameweek: number, horizon: number, signal?: AbortSignal) => request<FixtureResearchResult>(`/api/v1/analysis/fixtures/swing?seasonId=${seasonId}&gameweek=${gameweek}&horizon=${horizon}`, { signal, operation: 'fixture-research', staleKey: `fixture-research:${seasonId}:${gameweek}:${horizon}`, expectedSeasonId: seasonId }),
+  differentials: (seasonId: number, gameweek: number, horizon: number, filters: { position?: number; minPrice?: number; maxPrice?: number; maxOwnership?: number; minMinutes?: number; limit?: number }, signal?: AbortSignal) => { const params = new URLSearchParams({ seasonId: String(seasonId), gameweek: String(gameweek), horizon: String(horizon) }); Object.entries(filters).forEach(([key, value]) => { if (value !== undefined) params.set(key, String(value)); }); return request<DifferentialResult>(`/api/v1/analysis/differentials?${params}`, { signal, operation: 'differentials', staleKey: `differentials:${params}`, expectedSeasonId: seasonId }); },
   sync: () => request<SyncStatus>('/api/v1/sync', { method: 'POST', operation: 'sync' }),
   syncStatus: () => request<SyncStatus>('/api/v1/sync/status', { operation: 'sync-status', staleKey: 'sync-status' }),
   retrySync: (runId: number) => request<SyncStatus>(`/api/v1/sync/runs/${runId}/retry`, { method: 'POST', operation: 'sync-retry' }),

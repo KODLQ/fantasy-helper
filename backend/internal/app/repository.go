@@ -59,6 +59,11 @@ type HistoricalResearchRepository interface {
 	LoadPlayerAnalysis(context.Context, int, int, string, int) (PlayerAnalysis, bool, error)
 }
 
+type TransferResearchRepository interface {
+	LoadResearchSnapshotAtCutoff(context.Context, int, int) (ResearchSnapshot, bool, error)
+	SavePlanningScenario(context.Context, int64, string, TransferSimulationInput, TransferSimulation) (PlanningScenario, error)
+}
+
 type DatasetFreshnessRepository interface {
 	CurrentDatasetFreshness(context.Context, Scope) (Freshness, error)
 }
@@ -452,7 +457,7 @@ func (r *PostgresRepository) EnsureSchema(ctx context.Context) error {
 		return fmt.Errorf("database has no applied migrations; run db/migrate.sh before starting the backend")
 	}
 	var missing string
-	if err := r.db.QueryRowContext(ctx, `SELECT required.table_name FROM (VALUES ('dataset_snapshots'), ('source_payloads'), ('sync_work_items'), ('player_snapshots'), ('player_gameweek_facts'), ('users'), ('sessions'), ('security_events')) AS required(table_name) LEFT JOIN information_schema.tables actual ON actual.table_schema='public' AND actual.table_name=required.table_name WHERE actual.table_name IS NULL ORDER BY required.table_name LIMIT 1`).Scan(&missing); err != nil {
+	if err := r.db.QueryRowContext(ctx, `SELECT required.table_name FROM (VALUES ('dataset_snapshots'), ('source_payloads'), ('sync_work_items'), ('player_snapshots'), ('player_gameweek_facts'), ('users'), ('sessions'), ('security_events'), ('planning_scenarios')) AS required(table_name) LEFT JOIN information_schema.tables actual ON actual.table_schema='public' AND actual.table_name=required.table_name WHERE actual.table_name IS NULL ORDER BY required.table_name LIMIT 1`).Scan(&missing); err != nil {
 		if err == sql.ErrNoRows {
 			return nil
 		}

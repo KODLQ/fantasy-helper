@@ -176,6 +176,35 @@ func TestPostgresRepositoryPersistence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	deadline := time.Now().UTC().Add(time.Hour)
+	if _, err := database.ExecContext(ctx, `UPDATE gameweeks SET deadline_time=$1 WHERE season_id=(SELECT id FROM seasons WHERE source_id=$2) AND source_id=1`, deadline, snapshot.Season.ID); err != nil {
+		t.Fatal(err)
+	}
+	researchSnapshotID := newSnapshotID()
+	if err := repository.CreateDatasetSnapshot(ctx, DatasetSnapshot{ID: researchSnapshotID, Dataset: "public-fpl", State: "actual", SeasonID: snapshot.Season.ID, SourceFetchedAt: deadline.Add(-time.Minute), NormalizedAt: deadline.Add(-time.Minute), NormalizerVersion: "fpl-public-v1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.UpsertPlayerSnapshots(ctx, researchSnapshotID, snapshot.Season.ID, deadline.Add(-time.Minute), snapshot.Players); err != nil {
+		t.Fatal(err)
+	}
+	cutoff, found, err := repository.LoadResearchSnapshotAtCutoff(ctx, snapshot.Season.ID, 1)
+	if err != nil || !found || cutoff.ID != researchSnapshotID || cutoff.ObservedAt.After(deadline) {
+		t.Fatalf("deadline-safe research snapshot failed: %#v found=%v err=%v", cutoff, found, err)
+	}
+	simulationInput := TransferSimulationInput{SeasonID: snapshot.Season.ID, Gameweek: 1, Horizon: 5, FreeTransfers: 1, Transfers: []TransferMove{{PlayerOut: 5, PlayerIn: 17}}}
+	simulationResult := TransferSimulation{SimulationID: "sim-repository-ownership", AlgorithmVersion: transferSimulationVersion, SnapshotID: researchSnapshotID}
+	firstScenario, err := repository.SavePlanningScenario(ctx, firstUser.ID, "First scenario", simulationInput, simulationResult)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repeatedScenario, err := repository.SavePlanningScenario(ctx, firstUser.ID, "Ignored rename", simulationInput, simulationResult)
+	if err != nil || repeatedScenario.ID != firstScenario.ID {
+		t.Fatalf("scenario save was not idempotent: %#v %#v err=%v", firstScenario, repeatedScenario, err)
+	}
+	secondScenario, err := repository.SavePlanningScenario(ctx, secondUser.ID, "Second owner scenario", simulationInput, simulationResult)
+	if err != nil || secondScenario.ID == firstScenario.ID {
+		t.Fatalf("scenario ownership was not isolated: %#v %#v err=%v", firstScenario, secondScenario, err)
+	}
 	firstSquad := squad
 	firstSquad.Name = "First private squad"
 	secondSquad := squad
