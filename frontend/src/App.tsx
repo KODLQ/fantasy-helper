@@ -10,12 +10,13 @@ import { SquadPlanner } from './features/squad';
 import { SyncControl } from './features/sync-control';
 import { ManagerWorkspace } from './features/manager-workspace';
 import { LeagueInsights } from './features/league-insights';
+import { TransferResearch } from './features/transfer-research';
 import { useSeason } from './season-context';
 import { seasonStatusLabel } from './season-selection.mjs';
 import './interactive.css';
 import './sync-control.css';
 
-type View = 'research' | 'compare' | 'squad' | 'recommendations' | 'manager' | 'league-insights';
+type View = 'research' | 'compare' | 'squad' | 'recommendations' | 'manager' | 'league-insights' | 'transfers';
 const demoIDs = [1, 2, 4, 5, 6, 7, 22, 8, 9, 10, 11, 12, 13, 14, 15];
 const demoStarting = [1, 4, 5, 6, 8, 9, 10, 11, 13, 14, 15];
 const demoBench = [2, 7, 12, 22];
@@ -45,11 +46,11 @@ function App() {
     <aside className="sidebar">
       <div className="brand"><div className="brand-mark">FH</div><div><strong>Fantasy Helper</strong><span>Research desk</span></div></div>
       <div className="side-label">Workspace</div>
-      <nav>{([['research', 'Research', '⌕'], ['compare', `Compare${compareIDs.length ? ` · ${compareIDs.length}` : ''}`, '◫'], ['squad', 'Squad planner', '♙'], ['recommendations', 'Recommendations', '✦'], ['manager', 'Manager & leagues', '◎'], ['league-insights', 'League insights', '≈']] as [View, string, string][]).map(([key, label, icon]) => <button key={key} className={view === key ? 'nav-item active' : 'nav-item'} onClick={() => setView(key)}><span>{icon}</span>{label}</button>)}</nav>
+      <nav>{([['research', 'Research', '⌕'], ['compare', `Compare${compareIDs.length ? ` · ${compareIDs.length}` : ''}`, '◫'], ['squad', 'Squad planner', '♙'], ['transfers', 'Transfers & fixtures', '⇄'], ['recommendations', 'Recommendations', '✦'], ['manager', 'Manager & leagues', '◎'], ['league-insights', 'League insights', '≈']] as [View, string, string][]).map(([key, label, icon]) => <button key={key} className={view === key ? 'nav-item active' : 'nav-item'} onClick={() => setView(key)}><span>{icon}</span>{label}</button>)}</nav>
       <div className="sidebar-footer"><SyncControl onNotice={setNotice} onStatus={setFreshness} /></div>
     </aside>
     <main className="main-content">
-      <header className="topbar"><div><span className="eyebrow">FPL / {season?.name ?? 'select season'}</span><h1>{view === 'research' ? 'Player research' : view === 'compare' ? 'Compare players' : view === 'squad' ? 'Squad planner' : view === 'manager' ? 'Manager & leagues' : view === 'league-insights' ? 'League insights' : 'Recommendations'}</h1></div><div className="topbar-actions"><SeasonSelector /><div className="week-chip">{gameweek ? `GW ${gameweek}` : 'No gameweek'} <span>·</span> {season?.state === 'historical' ? 'historical' : 'decision window'}</div><ProfileMenu open={profileOpen} onOpenChange={setProfileOpen} /></div></header>
+      <header className="topbar"><div><span className="eyebrow">FPL / {season?.name ?? 'select season'}</span><h1>{view === 'research' ? 'Player research' : view === 'compare' ? 'Compare players' : view === 'squad' ? 'Squad planner' : view === 'manager' ? 'Manager & leagues' : view === 'league-insights' ? 'League insights' : view === 'transfers' ? 'Transfers & fixtures' : 'Recommendations'}</h1></div><div className="topbar-actions"><SeasonSelector /><div className="week-chip">{gameweek ? `GW ${gameweek}` : 'No gameweek'} <span>·</span> {season?.state === 'historical' ? 'historical' : 'decision window'}</div><ProfileMenu open={profileOpen} onOpenChange={setProfileOpen} /></div></header>
       {freshnessState !== 'actual' && freshnessState !== 'fresh' && <div className="freshness-banner" data-testid="freshness-banner"><span className="banner-icon">!</span><div><strong>{freshnessTitle}</strong><span>{freshness.warning ?? freshness.freshness?.warning ?? 'Sync official data to replace the sample research snapshot with the latest FPL data.'}</span></div></div>}
       {notice && <div className="toast" onClick={() => setNotice('')}>{notice}<span>×</span></div>}
       {seasonContext.notice && <div className="scope-notice" role="status">{seasonContext.notice}</div>}
@@ -57,6 +58,7 @@ function App() {
         {view === 'research' && <Research seasonId={seasonId} onSelect={setSelectedID} onCompare={addCompare} onSquad={() => setView('squad')} />}
         {view === 'compare' && <Compare seasonId={seasonId} ids={compareIDs} onRemove={removeCompare} onBack={() => setView('research')} />}
         {view === 'squad' && (auth.user ? <SquadPlanner seasonId={seasonId} onRecommend={() => setView('recommendations')} onLoadDemo={loadDemoSquad} initialPlayerId={squadPlayerID} onInitialPlayerHandled={() => setSquadPlayerID(null)} /> : <ProtectedWorkspace title="Sign in to plan your squad" onSignIn={() => setProfileOpen(true)} />)}
+        {view === 'transfers' && (auth.user ? <TransferResearch seasonId={seasonId} gameweek={gameweek ?? 1} /> : <ProtectedWorkspace title="Sign in to model private transfer scenarios" onSignIn={() => setProfileOpen(true)} />)}
         {view === 'recommendations' && (auth.user ? <Recommendations seasonId={seasonId} /> : <ProtectedWorkspace title="Sign in to save private recommendations" onSignIn={() => setProfileOpen(true)} />)}
         {view === 'manager' && (auth.user ? <ManagerWorkspace seasonId={seasonId} gameweek={gameweek ?? 1} /> : <ProtectedWorkspace title="Sign in to sync your FPL manager and leagues" onSignIn={() => setProfileOpen(true)} />)}
         {view === 'league-insights' && (auth.user ? <LeagueInsights seasonId={seasonId} gameweek={gameweek ?? 1} /> : <ProtectedWorkspace title="Sign in to research your league" onSignIn={() => setProfileOpen(true)} />)}
