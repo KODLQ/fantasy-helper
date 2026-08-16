@@ -38,6 +38,10 @@ formulas:
     version: differential-contribution-v1
     definition: "differentialContribution(A,B) = sum(effective points of A-only players) - sum(effective points of B-only players)"
     consumers: [fpl-manager-league-sync, fpl-league-gameweek-insights]
+  automatic-substitution-impact:
+    version: automatic-substitution-impact-v1
+    definition: "substitutionImpact = playerGameweekPoints(playerIn) - playerGameweekPoints(playerOut); the recorded substitution remains factual when either point input is missing"
+    consumers: [fpl-league-gameweek-insights, fpl-optimal-team-learning]
   fixture-ease:
     version: fixture-research-v1
     definition: "fixtureEase=(6-difficulty)/5; fixtureWeight=homeAwayWeight*availabilityFactor; teamFixtureEase=sum(fixtureEase*fixtureWeight)/sum(fixtureWeight)"

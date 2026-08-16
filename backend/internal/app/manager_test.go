@@ -203,9 +203,78 @@ func TestDeterministicMemberSelectionAndComparisonFormulas(t *testing.T) {
 	if left.Overlap != 1.0/3.0 || left.NetPoints != 10 || right.NetPoints != 9 || left.PointDifference != 1 || right.PointDifference != -1 {
 		t.Fatalf("left=%#v right=%#v", left, right)
 	}
+	if left.DifferentialContribution != -4 || right.DifferentialContribution != 4 || left.CaptainDelta != 0 {
+		t.Fatalf("differential formula left=%#v right=%#v", left, right)
+	}
 	left, right = CompareTeamsWithCosts([]ManagerPick{{PlayerID: 1, Multiplier: 2}}, []ManagerPick{{PlayerID: 1, Multiplier: 1}}, map[int]int{1: 5}, 4, 0, "provisional")
-	if left.NetPoints != 6 || right.NetPoints != 5 || left.PointDifference != 1 || left.OutcomeState != "provisional" {
+	if left.NetPoints != 6 || right.NetPoints != 5 || left.PointDifference != 1 || left.OutcomeState != "provisional" || left.CaptainDelta != 0 {
 		t.Fatalf("cost comparison left=%#v right=%#v", left, right)
+	}
+}
+
+func TestLeagueInsightFormulaVersionsAndOutcomeStates(t *testing.T) {
+	left := []ManagerPick{
+		{PlayerID: 1, Position: 1, Multiplier: 2, Captain: true},
+		{PlayerID: 2, Position: 2, Multiplier: 1},
+		{PlayerID: 3, Position: 12, Multiplier: 0},
+	}
+	right := []ManagerPick{
+		{PlayerID: 1, Position: 1, Multiplier: 1},
+		{PlayerID: 4, Position: 2, Multiplier: 1},
+		{PlayerID: 3, Position: 3, Multiplier: 1},
+	}
+	a, b := CompareTeamsWithCosts(left, right, map[int]int{1: 6, 2: 4, 3: 2, 4: 8}, 4, 0, "actual")
+	if a.Overlap != 0.5 || a.StartingXIOverlap != 1.0/4.0 || a.DifferentialContribution != -4 || b.DifferentialContribution != 4 {
+		t.Fatalf("overlap/differential a=%#v b=%#v", a, b)
+	}
+	if a.CaptainDelta != 6 || a.GrossPoints != 16 || a.NetPoints != 12 || a.PointDifference != -4 || b.PointDifference != 4 {
+		t.Fatalf("points/captain a=%#v b=%#v", a, b)
+	}
+	impact, complete := AutomaticSubstitutionImpact(AutomaticSubstitution{PlayerIn: 4, PlayerOut: 2}, map[int]int{2: 4, 4: 8})
+	if !complete || impact != 4 {
+		t.Fatalf("automatic substitution impact=%d complete=%v", impact, complete)
+	}
+	if _, complete = AutomaticSubstitutionImpact(AutomaticSubstitution{PlayerIn: 4, PlayerOut: 99}, map[int]int{4: 8}); complete {
+		t.Fatal("missing automatic-substitution input was treated as complete")
+	}
+	states := []struct {
+		name    string
+		base    string
+		missing bool
+		stale   bool
+		want    string
+	}{
+		{name: "completed", base: "actual", want: "actual"},
+		{name: "live", base: "provisional", want: "provisional"},
+		{name: "partial", base: "actual", missing: true, want: "partial"},
+		{name: "stale", base: "actual", stale: true, want: "stale"},
+		{name: "unavailable", base: "estimated", want: "unavailable"},
+	}
+	for _, fixture := range states {
+		t.Run(fixture.name, func(t *testing.T) {
+			if got := ResolveAnalysisOutcome(fixture.base, fixture.missing, fixture.stale); got != fixture.want {
+				t.Fatalf("state=%s want=%s", got, fixture.want)
+			}
+		})
+	}
+}
+
+func TestLeagueAnalysisInputParsingRejectsAmbiguousSelections(t *testing.T) {
+	if ids, err := parseStrictEntryIDs("101, 102"); err != nil || len(ids) != 2 || ids[0] != 101 || ids[1] != 102 {
+		t.Fatalf("entry IDs=%v err=%v", ids, err)
+	}
+	for _, value := range []string{"101,101", "101,nope", "101,-2"} {
+		if _, err := parseStrictEntryIDs(value); err == nil {
+			t.Fatalf("invalid entry IDs %q were accepted", value)
+		}
+	}
+	if value, err := parseOptionalBounded("", 8, 2, 8); err != nil || value != 8 {
+		t.Fatalf("default bounded value=%d err=%v", value, err)
+	}
+	for _, value := range []string{"nope", "1", "9"} {
+		if _, err := parseOptionalBounded(value, 8, 2, 8); err == nil {
+			t.Fatalf("invalid bounded value %q was accepted", value)
+		}
 	}
 }
 

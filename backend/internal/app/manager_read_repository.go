@@ -75,6 +75,23 @@ func (r *PostgresRepository) LoadManagerTransfers(ctx context.Context, userID in
 	return items, rows.Err()
 }
 
+func (r *PostgresRepository) LoadAutomaticSubstitutions(ctx context.Context, userID int64, seasonID, entryID, gameweek int) ([]AutomaticSubstitution, error) {
+	rows, err := r.db.QueryContext(ctx, `WITH latest AS (SELECT ps.id FROM manager_pick_snapshots ps JOIN manager_entries me ON me.id=ps.entry_id JOIN seasons s ON s.id=me.season_id JOIN gameweeks g ON g.id=ps.gameweek_id WHERE me.user_id=$1 AND s.source_id=$2 AND me.source_id=$3 AND g.source_id=$4 ORDER BY ps.normalized_at DESC,ps.id DESC LIMIT 1) SELECT pin.source_id,pout.source_id FROM latest l JOIN manager_automatic_substitutions a ON a.snapshot_id=l.id JOIN players pin ON pin.id=a.player_in_id JOIN players pout ON pout.id=a.player_out_id ORDER BY pin.source_id,pout.source_id`, userID, seasonID, entryID, gameweek)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AutomaticSubstitution{}
+	for rows.Next() {
+		var item AutomaticSubstitution
+		if err := rows.Scan(&item.PlayerIn, &item.PlayerOut); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
 func (r *PostgresRepository) LoadLeagueStandings(ctx context.Context, userID int64, seasonID, leagueID, gameweek, page int) (LeagueStandings, bool, error) {
 	var snapshot int64
 	result := LeagueStandings{Members: []LeagueMember{}}
@@ -203,6 +220,23 @@ func (r *PostgresRepository) LoadPlayerGameweekPoints(ctx context.Context, seaso
 		}
 	}
 	return points, state, rows.Err()
+}
+
+func (r *PostgresRepository) LoadUnfinishedFixtureIDs(ctx context.Context, seasonID, gameweek int) ([]int, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT f.source_id FROM fixtures f JOIN seasons s ON s.id=f.season_id JOIN gameweeks g ON g.id=f.gameweek_id WHERE s.source_id=$1 AND g.source_id=$2 AND f.finished=FALSE ORDER BY f.kickoff_time NULLS LAST,f.source_id`, seasonID, gameweek)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []int{}
+	for rows.Next() {
+		var id int
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	return items, rows.Err()
 }
 
 func (r *PostgresRepository) LoadManagerDecisionAnalysis(ctx context.Context, userID int64, seasonID, entryID, gameweek int) (ManagerDecisionAnalysis, error) {
