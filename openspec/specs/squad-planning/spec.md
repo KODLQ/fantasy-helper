@@ -1,10 +1,14 @@
 # squad-planning Specification
 
 ## Purpose
-TBD - created by archiving change fpl-research-assistant-foundation. Update Purpose after archive.
+Define how authenticated users build, validate, save, and revise a private 15-player FPL planning squad and its legal lineup choices for a selected season.
 ## Requirements
 ### Requirement: Maintain one planning squad
 The system SHALL allow the user to create and update one default planning squad containing exactly 15 distinct players from the active season, with a saved name and last-updated timestamp.
+
+#### Scenario: User creates their first planning squad
+- **WHEN** an authenticated user with no saved squad selects a valid 15-player team from the searchable active-season player pool, provides a team name, and confirms creation
+- **THEN** the system saves the team with a legal default lineup, bench order, captain, and vice-captain and restores it when the planning workspace is reopened
 
 #### Scenario: User adds a valid player to the plan
 - **WHEN** the user adds an active-season player and the resulting squad remains valid

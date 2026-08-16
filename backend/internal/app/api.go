@@ -1079,6 +1079,7 @@ func (a *API) squad(w http.ResponseWriter, r *http.Request) {
 		if a.Auth == nil {
 			a.Store.SaveSquad(input)
 		}
+		input.Validation = []ValidationError{}
 		scope := Scope{SeasonID: season.ID, Dataset: "public-fpl"}
 		freshness := a.requestFreshness(r.Context(), scope)
 		writeEnvelopeWithWarnings(w, http.StatusOK, w.Header().Get("X-Request-ID"), scope, freshness, warnings, domain.EnrichSquad(input))

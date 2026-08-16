@@ -73,6 +73,15 @@ func TestAPIResearchSquadAndRecommendationFlow(t *testing.T) {
 	if save.Code != http.StatusOK {
 		t.Fatalf("save status = %d, body = %s", save.Code, save.Body.String())
 	}
+	var saveBody struct {
+		Data Squad `json:"data"`
+	}
+	if err := json.NewDecoder(save.Body).Decode(&saveBody); err != nil {
+		t.Fatal(err)
+	}
+	if saveBody.Data.Validation == nil {
+		t.Fatal("successful squad response must return an empty validation array, not null")
+	}
 
 	recommendation := httptest.NewRecorder()
 	handler.ServeHTTP(recommendation, httptest.NewRequest(http.MethodPost, "/api/v1/recommendations", bytes.NewBufferString(`{}`)))

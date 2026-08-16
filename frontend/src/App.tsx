@@ -27,10 +27,11 @@ function App() {
   const [freshness, setFreshness] = useState<SyncStatus>({ status: 'empty', freshness: { status: 'unavailable', state: 'unavailable' } });
   const [compareIDs, setCompareIDs] = useState<number[]>([]);
   const [selectedID, setSelectedID] = useState<number | null>(null);
+  const [squadPlayerID, setSquadPlayerID] = useState<number | null>(null);
   const [notice, setNotice] = useState('');
   const [profileOpen, setProfileOpen] = useState(false);
 
-  useEffect(() => { setCompareIDs([]); setSelectedID(null); }, [seasonId]);
+  useEffect(() => { setCompareIDs([]); setSelectedID(null); setSquadPlayerID(null); }, [seasonId]);
 
   const freshnessState = freshness.freshness?.state ?? freshness.freshness?.status ?? freshness.status;
   const freshnessTitle = freshness.status === 'offline' ? 'Backend connection unavailable' : freshnessState === 'partial' ? 'Some warehouse inputs are missing' : freshnessState === 'stale' ? 'Warehouse data is stale' : freshnessState === 'unavailable' || freshness.status === 'empty' ? 'Demo snapshot is active' : 'Warehouse data needs attention';
@@ -52,12 +53,12 @@ function App() {
       {notice && <div className="toast" onClick={() => setNotice('')}>{notice}<span>×</span></div>}
       {seasonContext.notice && <div className="scope-notice" role="status">{seasonContext.notice}</div>}
       {seasonContext.loading ? <DataState status="loading" message="Loading available FPL seasons…" /> : seasonContext.error ? <div className="empty-panel season-state" role="alert"><h3>Could not load seasons</h3><p>{seasonContext.error}</p><button className="primary-button" onClick={seasonContext.retry}>Try again</button></div> : seasonContext.unknownSeason ? <div className="empty-panel season-state" data-testid="season-not-found"><h3>Season {seasonContext.unknownSeason} is not available</h3><p>Choose one of the imported seasons. The requested URL was not silently redirected.</p>{seasonContext.seasons.map((item) => <button className="secondary-button" key={item.id} onClick={() => seasonContext.selectSeason(item.id)}>{item.name}</button>)}</div> : !seasonId ? <div className="empty-panel season-state"><h3>No season data available</h3><p>Sync the current official season or import a historical archive to begin.</p></div> : season?.missingInputs.includes('catalogue') ? <div className="empty-panel season-state" data-testid="season-data-unavailable" role="alert"><h3>{season.name} data is unavailable</h3><p>This season is known, but its queryable catalogue has not been imported. Choose another season or import its archive.</p></div> : <>
-        {view === 'research' && <Research seasonId={seasonId} onSelect={setSelectedID} onCompare={addCompare} onSquad={loadDemoSquad} />}
+        {view === 'research' && <Research seasonId={seasonId} onSelect={setSelectedID} onCompare={addCompare} onSquad={() => setView('squad')} />}
         {view === 'compare' && <Compare seasonId={seasonId} ids={compareIDs} onRemove={removeCompare} onBack={() => setView('research')} />}
-        {view === 'squad' && (auth.user ? <SquadPlanner seasonId={seasonId} onRecommend={() => setView('recommendations')} onLoadDemo={loadDemoSquad} /> : <ProtectedWorkspace title="Sign in to plan your squad" onSignIn={() => setProfileOpen(true)} />)}
+        {view === 'squad' && (auth.user ? <SquadPlanner seasonId={seasonId} onRecommend={() => setView('recommendations')} onLoadDemo={loadDemoSquad} initialPlayerId={squadPlayerID} onInitialPlayerHandled={() => setSquadPlayerID(null)} /> : <ProtectedWorkspace title="Sign in to plan your squad" onSignIn={() => setProfileOpen(true)} />)}
         {view === 'recommendations' && (auth.user ? <Recommendations seasonId={seasonId} /> : <ProtectedWorkspace title="Sign in to save private recommendations" onSignIn={() => setProfileOpen(true)} />)}
         {view === 'manager' && (auth.user ? <ManagerWorkspace seasonId={seasonId} gameweek={gameweek ?? 1} /> : <ProtectedWorkspace title="Sign in to sync your FPL manager and leagues" onSignIn={() => setProfileOpen(true)} />)}
-        {selectedID && <PlayerDrawer seasonId={seasonId} id={selectedID} onClose={() => setSelectedID(null)} onCompare={addCompare} onAddToSquad={() => { setSelectedID(null); setView('squad'); setNotice('Squad planner opened. Player transfers are not available in this workspace yet.'); }} />}
+        {selectedID && <PlayerDrawer seasonId={seasonId} id={selectedID} onClose={() => setSelectedID(null)} onCompare={addCompare} onAddToSquad={() => { setSquadPlayerID(selectedID); setSelectedID(null); setView('squad'); setNotice('Squad planner opened.'); }} />}
       </>}
     </main>
   </div>;
